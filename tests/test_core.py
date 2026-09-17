@@ -583,3 +583,113 @@ def test_legacy_and_manual_ideas_do_not_invent_source(tmp_path, monkeypatch):
     assert "topicSource" not in updated
     manual = asyncio.run(web.api_ideas_create(web.IdeaItem(title="手动灵感")))
     assert manual["topicSource"] is None
+
+
+# ---- Hot-topic gate integration: both chat APIs, persistence and cancellation ----
+
+@pytest.fixture
+def hot_web(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(web, "SESSIONS_DIR", tmp_path / "_sessions")
+    monkeypatch.setattr(web, "_HOT_TOPIC_TASKS", {})
+    monkeypatch.setattr(web, "_session_locks", {})
+    return tmp_path
+
+
+def test_hot_topic_context_survives_missing_client_metadata(hot_web):
+    req = web.ChatRequest(message="创作", sessionId="hot-context", hotTopic={"title": "热点", "url": "https://example.org/"})
+    topic = web._resolve_hot_topic(req)
+    assert web._resolve_hot_topic(web.ChatRequest(message="修改", sessionId=req.sessionId)) == topic
+    assert web._resolve_hot_topic(web.ChatRequest(message="普通对话", sessionId="ordinary")) is None
+    with pytest.raises(web.HTTPException) as exc:
+        web._resolve_hot_topic(web.ChatRequest(message="更换热点", sessionId=req.sessionId, hotTopic={"title": "别的热点"}))
+    assert exc.value.status_code == 409
+
+
+def test_corrupt_hot_topic_context_cannot_fall_back_to_ordinary_agent(hot_web):
+    path = web._hot_topic_state_path("broken")
+    path.parent.mkdir(parents=True)
+    path.write_text("not-json", encoding="utf-8")
+    with pytest.raises(web.HTTPException):
+        web._resolve_hot_topic(web.ChatRequest(message="继续", sessionId="broken"))
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_hot_topic_nonstream_saves_only_approved_articles(hot_web, monkeypatch, approved):
+    seen = []
+    class FakeFlow:
+        def __init__(self, invoke, progress):
+            self.report = {"status": "approved" if approved else "blocked"}
+        async def run(self, topic, request, profile, previous):
+            seen.append((profile, previous))
+            return {"status": self.report["status"], "text": "通过" if approved else "资料不足", "article": "# 核验后的文章" if approved else ""}
+    monkeypatch.setattr(web, "HotTopicFlow", FakeFlow)
+    def no_agent(*args):
+        raise AssertionError("must not run ordinary agent")
+    monkeypatch.setattr(web, "run_agent_sync", no_agent)
+    req = web.ChatRequest(message="创作", sessionId="hot-save", hotTopic={"title": "热点"})
+    result = asyncio.run(web.api_chat(req))
+    assert result["fact_check"] == ("approved" if approved else "blocked")
+    articles = list(hot_web.glob("热点创作-*/*.md"))
+    assert bool(articles) is approved
+    assert seen == [("", "")]
+    followup = asyncio.run(web.api_chat(web.ChatRequest(message="修改标题", sessionId=req.sessionId)))
+    assert followup["fact_check"] == result["fact_check"]
+    assert seen[-1][1] == ("# 核验后的文章" if approved else "")
+    assert not web._HOT_TOPIC_TASKS
+    saved = asyncio.run(web.api_chat_last(req.sessionId))
+    assert saved["fact_check"] == result["fact_check"]
+
+
+def test_hot_topic_stream_hides_intermediate_drafts_and_survives_disconnect(hot_web, monkeypatch):
+    class FakeFlow:
+        def __init__(self, invoke, progress):
+            self.progress = progress
+            self.report = {"status": "blocked", "reviews": [{"draft": "不能交付的初稿"}]}
+        async def run(self, *args):
+            self.progress("正在复核")
+            await asyncio.sleep(0)
+            return {"status": "blocked", "text": "复核失败", "article": ""}
+    monkeypatch.setattr(web, "HotTopicFlow", FakeFlow)
+    async def scenario():
+        req = web.ChatRequest(message="创作", sessionId="stream-hot", turnId="hot-turn", hotTopic={"title": "热点"})
+        await web.api_chat_stream(req)  # Do not consume the response: simulate disconnect.
+        await asyncio.gather(*list(web._BG_TASKS))
+        events = web._read_job_events("hot-turn")
+        assert [e["event"] for e in events] == ["activity", "token", "done"]
+        assert "不能交付的初稿" not in json.dumps(events, ensure_ascii=False)
+        assert (await web.api_chat_last(req.sessionId))["text"] == "复核失败"
+    asyncio.run(scenario())
+    assert not list(hot_web.glob("热点创作-*/*.md"))
+
+
+def test_hot_topic_stop_releases_locks_and_writes_terminal_event(hot_web, monkeypatch):
+    class FakeFlow:
+        def __init__(self, *args):
+            self.report = {"status": "running"}
+        async def run(self, *args):
+            await asyncio.Event().wait()
+    monkeypatch.setattr(web, "HotTopicFlow", FakeFlow)
+    async def scenario():
+        req = web.ChatRequest(message="创作", sessionId="stop-hot", turnId="stop-turn", hotTopic={"title": "热点"})
+        await web.api_chat_stream(req)
+        await asyncio.sleep(0)
+        assert (await web.api_chat_stop(web.StopRequest(sessionId=req.sessionId)))["stopped"]
+        assert not web._HOT_TOPIC_TASKS
+        assert not web._session_lock(req.sessionId).locked()
+        assert web._read_job_events("stop-turn")[-1]["event"] == "done"
+        assert (await web.api_chat_last(req.sessionId))["stop_reason"] == "user_stopped"
+    asyncio.run(scenario())
+    assert not list(hot_web.glob("热点创作-*/*.md"))
+
+
+def test_hot_topic_timeout_never_creates_article(hot_web, monkeypatch):
+    class FakeFlow:
+        def __init__(self, *args):
+            self.report = {"status": "running"}
+        async def run(self, *args):
+            raise asyncio.TimeoutError()
+    monkeypatch.setattr(web, "HotTopicFlow", FakeFlow)
+    result = asyncio.run(web.api_chat(web.ChatRequest(message="创作", sessionId="timeout-hot", hotTopic={"title": "热点"})))
+    assert result["fact_check"] == "blocked" and "超时" in result["response"]
+    assert not list(hot_web.glob("热点创作-*/*.md"))

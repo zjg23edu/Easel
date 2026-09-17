@@ -1,4 +1,4 @@
-import type { TopicSource } from './topicPrompt';
+import type { TopicSource, HotTopic } from './topicPrompt';
 function getBasePath(): string {
   const path = window.location.pathname;
   const cleaned = path.replace(/\/index\.html$/, '').replace(/\/$/, '');
@@ -551,6 +551,7 @@ export function streamChat(
   onRecoveryUnavailable?: () => void,
   attachments: UploadedFile[] = [],
   onQuestion?: (q: ChatQuestion) => void,
+  hotTopic?: HotTopic,
 ): AbortController {
   const controller = new AbortController();
   let lastEventId = 0;
@@ -635,7 +636,7 @@ export function streamChat(
         const res = first
           ? await fetch(`${BASE}/api/chat/stream`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message, persona: persona || undefined, sessionId, turnId, attachments }),
+              body: JSON.stringify({ message, persona: persona || undefined, sessionId, turnId, attachments, hotTopic }),
               signal: controller.signal,
             })
           : await fetch(`${BASE}/api/chat/jobs/${encodeURIComponent(turnId || '')}/stream?after=${lastEventId}`, {

@@ -5,8 +5,12 @@ export interface TopicSource {
   url: string;
 }
 
+export interface HotTopic extends TopicSource {
+  title: string;
+}
+
 export function buildTopicPrompt(title: string, source?: TopicSource): string {
-  const request = `围绕当前热点「${title}」：先判断它适不适合我的账号赛道；若合适，给 2-3 个差异化的二创角度，并把你最推荐的那条写成可直接发布的文案初稿。`;
+  const request = `围绕当前热点「${title}」：先判断它适不适合我的账号赛道；若合适，给 2-3 个差异化的二创角度，并把你最推荐的那条在资料充分并经过事实复核后写成文案初稿。`;
   if (!source) return request;
 
   let url = '';

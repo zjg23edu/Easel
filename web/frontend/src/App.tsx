@@ -18,7 +18,7 @@ import { fetchStatus, fetchPersonas, streamChat, fetchLastTurn, stopChat } from 
 import type { PersonaItem, UploadedFile, ChatQuestion } from './lib/api';
 import { questionStatus } from './lib/api';
 import { buildTopicPrompt } from './lib/topicPrompt';
-import type { TopicSource } from './lib/topicPrompt';
+import type { TopicSource, HotTopic } from './lib/topicPrompt';
 import { deleteSession as deleteRemoteSession } from './lib/api';
 import {
   loadSessions,
@@ -236,6 +236,7 @@ export default function App() {
     text: string,
     persona: string | undefined,
     attachments: UploadedFile[] = [],
+    hotTopic?: HotTopic,
   ) => {
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try { sessionStorage.setItem(`easel_pending_turn:${sessionId}`, turnId); } catch { /* ignore */ }
@@ -328,6 +329,7 @@ export default function App() {
             ? { ...p, [sessionId]: { ...p[sessionId], questions: [...a2.questions] } } : p));
         });
       },
+      hotTopic,
     );
   }, [appendAssistant, clearStream]);
 
@@ -450,12 +452,14 @@ export default function App() {
     attachments: UploadedFile[] = [],
     legacyAgentText?: string,
     truncateAt?: number,
+    explicitTopic?: HotTopic,
   ) => {
     const visible = displayText.trim();
     const agentMessage = (legacyAgentText || displayText).trim();
     if ((!agentMessage && attachments.length === 0) || streamCtl.current[sessionId]) return;
     const cur = sessionsRef.current.find((s) => s.id === sessionId);
-    const persona = cur?.persona || selectedPersona || undefined;
+    const persona = cur ? cur.persona : selectedPersona || undefined;
+    const hotTopic = explicitTopic || cur?.hotTopic;
     setSessions((prev) => {
       const next = prev.map((s) => {
         if (s.id !== sessionId) return s;
@@ -475,7 +479,7 @@ export default function App() {
       saveSessions(next);
       return next;
     });
-    startStream(sessionId, agentMessage, persona, attachments);
+    startStream(sessionId, agentMessage, persona, attachments, hotTopic);
   }, [selectedPersona, startStream]);
 
   const handleSendMessage = useCallback((sessionId: string, displayText: string, attachments?: UploadedFile[]) => {
@@ -497,10 +501,11 @@ export default function App() {
   const handleUseTopic = useCallback((title: string, source?: TopicSource) => {
     const prompt = buildTopicPrompt(title, source);
     const ns = createSession(selectedPersona || undefined);
+    ns.hotTopic = { title, platform: source?.platform || '', label: source?.label || '', url: source?.url || '' };
     setSessions((prev) => { const u = [ns, ...prev]; saveSessions(u); return u; });
     setActiveSessionId(ns.id);
     setCurrentPage('chat');
-    sendUserAndStream(ns.id, prompt);
+    sendUserAndStream(ns.id, prompt, [], undefined, undefined, ns.hotTopic);
   }, [selectedPersona, sendUserAndStream]);
 
   const handleStopStream = useCallback((sessionId: string) => {

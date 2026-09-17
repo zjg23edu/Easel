@@ -1,3 +1,4 @@
+import type { HotTopic } from './topicPrompt';
 import type { UploadedFile, ChatQuestion } from './api';
 
 export interface ChatMessage {
@@ -10,6 +11,7 @@ export interface ChatMessage {
 }
 
 export interface ChatSession {
+  hotTopic?: HotTopic;
   id: string;
   title: string;
   messages: ChatMessage[];

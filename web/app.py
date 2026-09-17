@@ -37,7 +37,10 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
 
 from easel.openclaw_cmd import openclaw_base_cmd
 from easel.persona import load_profile_text, persona_prefix, chat_turn_message, profile_exists, _FILE_ORDER
-from easel.timeouts import TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE
+from easel.timeouts import TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE, TIMEOUT_HOT_TOPIC
+from easel.gateway_tools import GatewayTools
+from easel.hot_topic import HotTopic, HotTopicFlow
+from easel.persona import list_personas
 try:
     from easel.gateway_questions import (
         GatewayClient, GatewayQuestionError, GatewayUnsupportedError,
@@ -915,6 +918,7 @@ class ChatRequest(BaseModel):
     sessionId: str | None = None
     turnId: str | None = None
     attachments: list[AttachmentRef] = Field(default_factory=list)
+    hotTopic: HotTopic | None = None
 
 
 def _attachment_scope(session_id: str) -> str:
@@ -1136,6 +1140,7 @@ _BG_TASKS: set = set()
 _RUNNING_CHAT: dict = {}
 # 被用户显式停止的会话 key：supervisor 据此把本轮当作正常「已停止」收尾（不报「被中断」、释放会话锁）。
 _STOPPED_CHAT: set = set()
+_HOT_TOPIC_TASKS: dict[str, asyncio.Task] = {}
 
 
 @app.get("/api/chat/last/{session_id}")
@@ -1191,6 +1196,105 @@ async def api_chat_job_stream(turn_id: str, after: int = 0):
     })
 
 
+def _hot_topic_state_path(session_id: str) -> Path:
+    return SESSIONS_DIR / "hot-topics" / _attachment_scope(session_id) / "context.json"
+
+
+def _write_hot_topic_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+
+
+def _resolve_hot_topic(req: ChatRequest) -> HotTopic | None:
+    """Retain the gate for follow-ups, including clients that omit hotTopic."""
+    state = None
+    if req.sessionId:
+        path = _hot_topic_state_path(req.sessionId)
+        if path.exists():
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+                topic = HotTopic.model_validate(state["topic"])
+            except (OSError, ValueError, KeyError):
+                raise HTTPException(409, "热点会话资料无法读取，请新开热点会话。") from None
+            if req.hotTopic and req.hotTopic != topic:
+                raise HTTPException(409, "热点来源与当前会话不一致，请新开会话切换选题。")
+        elif req.hotTopic:
+            topic = req.hotTopic
+        else:
+            return None
+    elif req.hotTopic:
+        raise HTTPException(400, "热点创作必须绑定会话。")
+    else:
+        return None
+    if req.attachments:
+        raise HTTPException(400, "热点核验暂不支持附件，请提供可访问的原文链接或另开普通对话处理附件。")
+    if req.persona and req.persona not in list_personas():
+        raise HTTPException(400, "所选账号画像不存在，请重新选择。")
+    if req.sessionId in _HOT_TOPIC_TASKS:
+        raise HTTPException(409, "本会话正在核验，请等待完成或先停止。")
+    if state is None:
+        _write_hot_topic_json(path, {"topic": topic.model_dump(), "previous": ""})
+    return topic
+
+
+async def _run_hot_topic_turn(req: ChatRequest, topic: HotTopic, turn_id: str, progress=lambda text: None) -> dict:
+    sk = req.sessionId
+    pk = f"web:{sk}"
+    task = asyncio.current_task()
+    _HOT_TOPIC_TASKS[sk] = task
+    flow = HotTopicFlow(GatewayTools(f"agent:main:{sk}"), progress)
+    state_path = _hot_topic_state_path(sk)
+    report_path = state_path.parent / f"{hashlib.sha256(turn_id.encode()).hexdigest()[:20]}.json"
+    result = {"status": "blocked", "text": "热点核验未完成，未生成初稿。", "article": ""}
+    xlock = _CrossProcLock(sk)
+    _save_turn(pk, "running", "", {"turn_id": turn_id})
+    try:
+        async with _session_lock(sk):
+            if not xlock.acquire(timeout=0):
+                raise RuntimeError("session busy")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            profile = load_profile_text(req.persona) if req.persona else ""
+            result = await asyncio.wait_for(
+                flow.run(topic, req.message, profile, state.get("previous", "")),
+                timeout=TIMEOUT_HOT_TOPIC,
+            )
+            # Audit must persist before an approved article enters the content library.
+            _write_hot_topic_json(report_path, flow.report)
+            if result["status"] == "approved":
+                directory = OUTPUTS_DIR / f"热点创作-{_attachment_scope(sk)}"
+                directory.mkdir(parents=True, exist_ok=True)
+                article_path = directory / f"初稿-{report_path.stem}.md"
+                article_path.write_text(result["article"], encoding="utf-8")
+                state["previous"] = result["article"]
+                _write_hot_topic_json(state_path, state)
+                result["text"] += f"\n\nMEDIA:{article_path.as_posix()}"
+    except asyncio.CancelledError:
+        result = {"status": "stopped", "text": "已停止核验，未交付初稿。", "article": ""}
+        flow.report.update(status="stopped")
+    except asyncio.TimeoutError:
+        result = {"status": "blocked", "text": "核验超时，未交付初稿。可以稍后重试。", "article": ""}
+        flow.report.update(status="blocked", reason="pipeline timeout")
+    except Exception as exc:
+        result = {"status": "blocked", "text": "热点核验执行失败，未交付初稿。请检查核验记录和 Gateway 日志。", "article": ""}
+        flow.report.update(status="blocked", reason=type(exc).__name__)
+    finally:
+        xlock.release()
+        try:
+            _write_hot_topic_json(report_path, flow.report)
+        except OSError:
+            pass
+        _save_turn(pk, "done", result["text"], {
+            "turn_id": turn_id, "clean_end": True,
+            "stop_reason": "user_stopped" if result["status"] == "stopped" else result["status"],
+            "fact_check": result["status"],
+        })
+        if _HOT_TOPIC_TASKS.get(sk) is task:
+            _HOT_TOPIC_TASKS.pop(sk, None)
+    return result
+
+
 @app.post("/api/chat/stream")
 async def api_chat_stream(req: ChatRequest):
     """SSE 真流式对话。
@@ -1203,6 +1307,7 @@ async def api_chat_stream(req: ChatRequest):
     """
     # 每轮末尾追加「先查技能库」提醒，抗长对话指令衰减（对用户不可见）
     message = _chat_message(req)
+    hot_topic = _resolve_hot_topic(req)
 
     # supervisor（跑 openclaw run）与 forward（转发 SSE 给浏览器）之间的事件通道。
     # 关键：run 跑在独立后台任务里，客户端断开只结束 forward，不取消 supervisor →
@@ -1241,6 +1346,13 @@ async def api_chat_stream(req: ChatRequest):
             except OSError:
                 pass
             client_q.put_nowait({"t": kind, "text": text, "id": event_seq, **extra})
+
+        if hot_topic is not None:
+            result = await _run_hot_topic_turn(req, hot_topic, turn_id, lambda text: to_client("activity", text))
+            to_client("token", result["text"])
+            to_client("done", sessionKey=sk)
+            client_q.put_nowait(CLIENT_DONE)
+            return
 
         _heal_openclaw_session(sk)       # 清洗历史里无签名 thinking 块，防回放失效
         fd, raw_path = tempfile.mkstemp(prefix="pc-stream-", suffix=".jsonl")
@@ -1595,6 +1707,8 @@ async def api_chat_stream(req: ChatRequest):
 
     # 把 run 跑在独立后台任务里（持强引用防 GC）——客户端断开不取消它。
     task = asyncio.create_task(supervisor())
+    if hot_topic is not None:
+        _HOT_TOPIC_TASKS[req.sessionId] = task
     _BG_TASKS.add(task)
 
     def _bg_done(t):
@@ -1709,6 +1823,15 @@ async def api_chat_stop(req: StopRequest):
     """用户显式停止当前会话正在跑的对话 agent：终止进程 → supervisor 收尾释放会话锁 →
     下一句立刻能发（不再卡「上一条还在跑」）。仅此显式入口会杀进程；客户端断线不经此路径。"""
     sk = (req.sessionId or "").strip()
+    fact_task = _HOT_TOPIC_TASKS.get(sk)
+    if fact_task is not None and not fact_task.done():
+        await asyncio.sleep(0)
+        fact_task.cancel()
+        try:
+            await fact_task
+        except asyncio.CancelledError:
+            _HOT_TOPIC_TASKS.pop(sk, None)
+        return {"stopped": True}
     proc = _RUNNING_CHAT.get(sk) if sk else None
     if proc is not None and proc.poll() is None:
         _STOPPED_CHAT.add(sk)          # 标记为用户停止，供 supervisor 正常收尾（不报「被中断」）
@@ -1737,6 +1860,10 @@ async def api_chat(req: ChatRequest):
     """非流式对话（备选）。"""
     # 每轮末尾追加「先查技能库」提醒，抗长对话指令衰减（对用户不可见）
     message = _chat_message(req)
+    hot_topic = _resolve_hot_topic(req)
+    if hot_topic is not None:
+        result = await _run_hot_topic_turn(req, hot_topic, req.turnId or uuid.uuid4().hex)
+        return {"response": result["text"], "fact_check": result["status"]}
     loop = asyncio.get_event_loop()
     # chat 可能中途触发制作层长任务 → 用 TIMEOUT_CHAT，与流式 /api/chat/stream 一致（勿用 300s）
     result = await loop.run_in_executor(None, run_agent_sync, message, TIMEOUT_CHAT, req.sessionId)
