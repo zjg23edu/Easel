@@ -1,10 +1,11 @@
+import type { TopicSource } from '../lib/topicPrompt';
 import { useState, useEffect, useCallback } from 'react';
 import { fetchTrends, createIdea } from '../lib/api';
 import type { TrendGroup } from '../lib/api';
 import { IconFire, IconRefresh, IconBookmark, IconCheck } from './icons';
 
 interface TrendsPageProps {
-  onUseTopic: (title: string) => void;   // 一键做成内容 → 跳 chat
+  onUseTopic: (title: string, source?: TopicSource) => void;   // 一键做成内容 → 跳 chat
 }
 
 const ALL_PLATFORMS: { key: string; label: string }[] = [
@@ -90,7 +91,7 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
                     {saved.has(it.title) ? <IconCheck size={14} /> : <IconBookmark size={14} />}
                   </button>
                   <button className="trend-use" title="做成内容"
-                    onClick={() => onUseTopic(it.title)}>做内容</button>
+                    onClick={() => onUseTopic(it.title, { platform: g.platform, label: g.label, url: it.url })}>做内容</button>
                 </div>
               ))}
             </div>

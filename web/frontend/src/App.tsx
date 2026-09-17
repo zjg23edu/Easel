@@ -17,6 +17,8 @@ import OnboardingWizard from './components/OnboardingWizard';
 import { fetchStatus, fetchPersonas, streamChat, fetchLastTurn, stopChat } from './lib/api';
 import type { PersonaItem, UploadedFile, ChatQuestion } from './lib/api';
 import { questionStatus } from './lib/api';
+import { buildTopicPrompt } from './lib/topicPrompt';
+import type { TopicSource } from './lib/topicPrompt';
 import { deleteSession as deleteRemoteSession } from './lib/api';
 import {
   loadSessions,
@@ -492,8 +494,8 @@ export default function App() {
   }, [sendUserAndStream]);
 
   // 热点「一键做成内容」：新开会话，把选题作为指令发出去，跳到对话页。
-  const handleUseTopic = useCallback((title: string) => {
-    const prompt = `围绕当前热点「${title}」：先判断它适不适合我的账号赛道；若合适，给 2-3 个差异化的二创角度，并把你最推荐的那条写成可直接发布的文案初稿。`;
+  const handleUseTopic = useCallback((title: string, source?: TopicSource) => {
+    const prompt = buildTopicPrompt(title, source);
     const ns = createSession(selectedPersona || undefined);
     setSessions((prev) => { const u = [ns, ...prev]; saveSessions(u); return u; });
     setActiveSessionId(ns.id);

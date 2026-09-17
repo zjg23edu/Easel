@@ -1,3 +1,4 @@
+import type { TopicSource } from '../lib/topicPrompt';
 import { useState, useEffect } from 'react';
 import {
   fetchTrends, fetchSchedule, fetchOutputs, fetchAccounts, fetchIdeas,
@@ -33,7 +34,7 @@ interface DashboardProps {
   persona: string;
   gatewayStatus: string;
   onNavigate: (page: Page) => void;
-  onUseTopic: (title: string) => void;
+  onUseTopic: (title: string, source?: TopicSource) => void;
 }
 
 const STATUS_LABEL: Record<string, string> = { idea: '选题', draft: '草稿', scheduled: '待发', published: '已发' };
@@ -158,7 +159,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
               <div className="dash-trend-plat">{g.label}</div>
               {g.items.slice(0, 3).map((it, i) => (
                 <div key={i} className="dash-trend-item" title={`${it.title}（点击做成内容）`}>
-                  <span className="dash-trend-title" onClick={() => onUseTopic(it.title)}>{it.title}</span>
+                  <span className="dash-trend-title" onClick={() => onUseTopic(it.title, { platform: g.platform, label: g.label, url: it.url })}>{it.title}</span>
                 </div>
               ))}
             </div>
