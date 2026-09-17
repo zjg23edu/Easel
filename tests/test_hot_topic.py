@@ -147,3 +147,22 @@ def test_contract_is_visible_to_model_at_every_stage():
     for tool,args in fake.calls:
         if tool == "llm-task":
             assert json.loads(args["prompt"].split("OUTPUT_JSON_SCHEMA:\n")[1]) == args["schema"]
+
+
+
+@pytest.mark.parametrize("still_needs_polish", [False, True])
+def test_editorial_feedback_triggers_one_revision_without_blocking(still_needs_polish):
+    first = deepcopy(REVIEW)
+    first["editorial_notes"] = ["p2没有回答标题的问题，请结合已核实事实给出具体解释，合并重复提醒。"]
+    final = first if still_needs_polish else REVIEW
+    revised = deepcopy(DRAFT)
+    revised["paragraphs"][1]["text"] = "我认为公开过程的价值在于提供观察依据，不能据此预判最终成绩。"
+    fake = Tools(drafts=[DRAFT, revised], reviews=[first, final])
+    result, report = run(fake)
+    assert result["status"] == "approved"
+    assert revised["paragraphs"][1]["text"] in result["article"]
+    writes = [args for tool,args in fake.calls if args.get("schema", {}).get("title") == "Draft"]
+    assert len(writes) == 2
+    assert writes[1]["input"]["feedback"]["editorial_notes"] == first["editorial_notes"]
+    assert writes[1]["input"]["remove_sections"] == []
+    assert len(report["reviews"]) == 2

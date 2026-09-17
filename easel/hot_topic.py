@@ -66,6 +66,7 @@ class Review(Record):
     core_supported: bool
     reason: str
     checks: list[Check]
+    editorial_notes: list[str] = Field(default_factory=list, max_length=5)
 
 
 class EvidenceError(RuntimeError):
@@ -131,18 +132,33 @@ core_evidence 只收录核心事件证据，supported_details 收录额外有依
 实时面板抓取结果可能是缓存快照：可证明页面展示了什么，不可当作此刻实时数值。"""
 WRITE = COMMON + """
 围绕已确认的 core_event 写有实际内容的公众号初稿。输入 facts 已提供可用事实，不需要凑齐所有背景数据。
-选择一个与事实相称的角度展开，解释它对读者意味着什么。不给未取得的材料编造内容，不声称模型已经发布。
+动笔前先在内部形成简短提纲：目标读者是谁；文章回答哪一个具体问题；核心判断是什么；
+用哪两三个已核实事实支撑判断，每个事实为什么值得读者知道。资料较少时围绕已有事实展开，不凑数。
+提纲用于组织写作，不作为额外章节输出。标题提出的问题必须在正文得到明确回答。
+选一个有依据的具体细节开场，按“看到了什么—如何理解—对读者有什么意义”推进，不机械重复这个句式。
+术语、数字要用普通读者能理解的语言解释，并说明其与论点的关系；来源不足以解释的数字或术语就删掉，
+不要拿数字装饰文章，也不能为了讲明白而补造技术机制、因果关系或趋势。
+每段推进一个新信息或论证，不用“透明化、观察窗口、过程可见性”等近义概括反复充当结论。
+判断边界只在必要处简短交代，通常一两句话即可；不要多段重复“尚未发布、最终效果待验证”。
+直接面向读者写文章，避免“知乎正文将其描述为”“现有材料适合讨论”等资料整理口吻进入正文。
+不给未取得的材料编造内容，不声称模型已经发布。
 omit_details 不得写入。少写“意义重大”等空话，不用“尚缺资料”替代文章。
 给出适配判断、2-3个角度和选定角度的标题、正文。事实段落标fact并引用fact_ids，分析标analysis，涉及事实前提仍引用fact_ids。
 分析须清楚呈现为判断，避免伪装成官方结论。不要自行添加URL，来源链接由程序附上。
-有 feedback 时删除或收窄有问题的表述，不新增事实，也不把删掉的数字换一种说法写回。
+有 feedback 时同时处理事实问题和 editorial_notes 中的编辑意见：重组、解释、删重或收窄表述，
+不新增无依据的事实，也不把删掉的数字换一种说法写回。不能用更多免责声明代替解释。
 """
 AUDIT = COMMON + """
 独立逐项对照正文检查 sections，必须覆盖每个 section_id 且不重复。不要相信写作阶段的自评。
 core_supported 只判断核心事件是否有证据，不因细节缺失、尚未发布或未给完整指标而置false。
 每一节：有正文支撑标supported并列source_ids；纯观点且未夹带无依据事实标opinion；不支持的细节、过度推断标remove。
 混合段落包含不支持的事实也标remove；数字换算、版本、归因和时间范围均需核实。
-删除有问题的细节即可，不把局部问题扩大为整篇“资料不足”。"""
+删除有问题的细节即可，不把局部问题扩大为整篇“资料不足”。
+同时做编辑检查：标题问题是否得到回答；是否有清楚的核心判断与事实支撑；术语/数字是否解释了意义；
+段落是否有推进；是否重复观点、空泛结论或判断边界；是否把资料整理口吻带进正文。
+存在实质问题时用 editorial_notes 给出最多五条具体修改意见，指出对应段落及怎么改；没有则返回空列表。
+不要为了给意见而挑无关的措辞偏好。编辑问题不影响 core_supported，不将纯表达问题标为remove。
+编辑改稿增加或改变的事实断言仍按同样标准核查。"""
 
 
 class HotTopicFlow:
@@ -290,8 +306,8 @@ class HotTopicFlow:
                 for i, paragraph in enumerate(draft.paragraphs, 1):
                     if set(paragraph.fact_ids) - known or (paragraph.kind == "fact" and not paragraph.fact_ids):
                         removed.add(f"p{i}")
-                if removed and attempt == 0:
-                    self.progress("收窄或删除有问题的细节后重新复核")
+                if (removed or review.editorial_notes) and attempt == 0:
+                    self.progress("根据事实复核和编辑意见改稿，再次检查")
                     draft = await self.model(WRITE, {**data, "previous": draft.model_dump(), "feedback": review.model_dump(),
                                                      "remove_sections": sorted(removed)}, Draft)
                     continue
