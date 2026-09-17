@@ -13,7 +13,7 @@ TOPIC = HotTopic(title="如何评价小米公开进行大语言模型Mimo V2.6�
 EVIDENCE = {
     "core_confirmed": True, "core_event": "小米公开展示MiMo-V2.6的训练过程", "reason": "训练面板显示目标型号正在训练",
     "core_evidence": [{"statement": "该面板展示MiMo-V2.6-Pro正在训练", "source_id": "S1", "quote": QUOTE}],
-    "supported_details": [], "omit_details": ["实时成本", "未核实的Token数量", "尚未公开的最终成绩"],
+    "supported_details": [], "unsupported_claims": [{"statement": "此刻累计成本123万美元", "reason": "未取得此刻的快照"}],
 }
 DRAFT = {"title": "公开训练过程能告诉我们什么", "suitability": "面向关注AI训练的读者", "angles": ["观察训练过程", "过程与结果的区别"],
          "paragraphs": [{"text": "面板显示MiMo-V2.6-Pro正在训练。", "kind": "fact", "fact_ids": ["F1"]},
@@ -57,7 +57,7 @@ def test_training_in_progress_without_release_cost_or_final_scores_produces_arti
     assert result["status"] == "approved"
     assert "正在训练" in result["article"]
     assert report["core_confirmed"] is True
-    assert "实时成本" in report["omitted_details"]
+    assert report["unsupported_claims"][0]["statement"] == "此刻累计成本123万美元"
     assert "最终成绩" not in result["article"].split("我更关注")[0]
     assert [args["schema"]["title"] for tool,args in fake.calls if tool == "llm-task"] == ["EventEvidence", "Draft", "Review"]
     assert len(report["research_rounds"]) == 1  # No searching for missing optional details.
@@ -85,7 +85,7 @@ def test_invalid_optional_quote_is_omitted_without_blocking_event():
     e["supported_details"] = [{"statement": "花费123万美元", "quote": "正文中根本没有这句话", "source_id": "S1"}]
     result, report = run(Tools(evidence=[e]))
     assert result["status"] == "approved"
-    assert "花费123万美元" in report["omitted_details"]
+    assert any(c["statement"] == "花费123万美元" for c in report["unsupported_claims"])
     assert len(report["facts"]) == 1
 
 
@@ -166,3 +166,29 @@ def test_editorial_feedback_triggers_one_revision_without_blocking(still_needs_p
     assert writes[1]["input"]["feedback"]["editorial_notes"] == first["editorial_notes"]
     assert writes[1]["input"]["remove_sections"] == []
     assert len(report["reviews"]) == 2
+
+
+def test_markdown_quote_keeps_real_evidence_and_snapshot_details():
+    e = deepcopy(EVIDENCE)
+    e["supported_details"] = [{"statement": "快照的批次配置是1568×16", "source_id": "S1",
+                               "quote": "train batch size × n 1,568 × 16 seqs", "scope": "snapshot",
+                               "usage_note": "页面快照，不代表当前实时值"}]
+    source = "**mimo-v2.6-pro**in progress step 10 started 2026-09-15 10:32 UTC\n\ntrain batch size × n\n\n1,568 × 16 seqs"
+    facts, unsupported = HotTopicFlow.facts(EventEvidence.model_validate(e), [
+        {"id": "S1", "text": source, "retrieved_at": "2026-09-17T08:40:00Z"}])
+    assert len(facts) == 2
+    assert facts[1]["scope"] == "snapshot"
+    assert facts[1]["retrieved_at"] == "2026-09-17T08:40:00Z"
+    assert len(unsupported) == 1  # A different unsupported current-value claim does not ban the snapshot.
+
+
+@pytest.mark.parametrize("wrong", ["MiMo-V2.5 is not released; cost $10 million",
+                                     "MiMo-V2.6 is released; cost $10 million",
+                                     "MiMo-V2.6 is not released; cost $11 million",
+                                     "MiMo-V2.6 is not released; cost $10 billion"])
+def test_quote_normalization_never_erases_meaning(wrong):
+    e = deepcopy(EVIDENCE)
+    e["core_evidence"][0]["quote"] = wrong
+    facts, _ = HotTopicFlow.facts(EventEvidence.model_validate(e), [
+        {"id": "S1", "text": "**MiMo-V2.6** is not released; cost $10 million"}])
+    assert facts == []
