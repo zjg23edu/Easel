@@ -301,3 +301,74 @@ def test_resolved_editorial_comments_do_not_trigger_rewrite_or_needs_edit():
     assert result["status"] == "approved"
     assert len(report["reviews"]) == 1
     assert report["editorial_ready"] is True
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_model_format_failure_retries_only_current_step_once(persistent):
+    fake = Tools()
+    failures = 0
+    async def invoke(tool, args):
+        nonlocal failures
+        if args.get("schema", {}).get("title") == "Review" and (failures == 0 or persistent):
+            failures += 1
+            raise ToolError("格式异常", kind="model_format")
+        return await fake(tool, args)
+    result, report = run(invoke)
+    assert result["status"] == ("error" if persistent else "approved")
+    assert report["model_retries"] == [{"stage": "Review", "reason": "model_format"}]
+    assert failures == (2 if persistent else 1)
+    assert len(report["research_rounds"]) == 1
+    assert sum(a.get("schema", {}).get("title") == "Draft" for t, a in fake.calls) == 1
+
+
+def test_permission_or_unknown_tool_failure_is_not_retried():
+    calls = 0
+    async def invoke(tool, args):
+        nonlocal calls
+        if tool == "llm-task":
+            calls += 1
+            raise ToolError("工具未开放")
+        return await Tools()(tool, args)
+    result, report = run(invoke)
+    assert result["status"] == "error"
+    assert calls == 1 and "model_retries" not in report
+
+
+@pytest.mark.parametrize("tool,status,body,kind", [
+    ("llm-task", 500, "LLM returned invalid JSON", "model_format"),
+    ("llm-task", 500, "LLM JSON did not match schema", "model_format"),
+    ("llm-task", 500, "Internal service error", "model_execution"),
+    ("llm-task", 401, "Unauthorized", "other"),
+    ("web_search", 500, "LLM returned invalid JSON", "other"),
+])
+def test_gateway_classifies_format_errors_without_leaking_body(tmp_path, monkeypatch, tool, status, body, kind):
+    import io
+    from urllib.error import HTTPError
+    from easel import gateway_tools
+    (tmp_path / "openclaw.json").write_text('{"gateway":{"auth":{"mode":"none"}}}', encoding="utf-8")
+    monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("EASEL_GATEWAY_HOST", "127.0.0.1")
+    class Opener:
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, status, "error", {}, io.BytesIO((body + " secret-test-value").encode()))
+    monkeypatch.setattr(gateway_tools, "build_opener", lambda *a: Opener())
+    with pytest.raises(ToolError) as caught:
+        gateway_tools.GatewayTools("test")._invoke(tool, {})
+    assert caught.value.kind == kind
+    assert "secret-test-value" not in str(caught.value)
+
+
+def test_masked_gateway_model_error_retries_once():
+    fake = Tools()
+    count = 0
+    async def invoke(tool, args):
+        nonlocal count
+        if args.get("schema", {}).get("title") == "Review":
+            count += 1
+            if count == 1:
+                raise ToolError("tool execution failed", kind="model_execution")
+        return await fake(tool, args)
+    result, report = run(invoke)
+    assert result["status"] == "approved"
+    assert count == 2
+    assert report["model_retries"] == [{"stage": "Review", "reason": "model_execution"}]

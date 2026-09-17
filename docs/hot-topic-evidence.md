@@ -34,6 +34,8 @@ python3 scripts/configure_hot_topic.py --config /root/.openclaw-easel/openclaw.j
 bash scripts/gateway.sh restart
 ```
 
+模型 JSON/契约错误，以及 `llm-task` 的 HTTP 500，最多重试当前模型步骤一次，保留原材料和已完成阶段，记录 `model_retries`。当前 Gateway 会把内部异常隐藏为通用500，客户端不能保证区分格式错误和其他执行失败；模型步骤没有发布等副作用，故仅对这一工具做一次有上限重试。明确的401/403/404、其他工具错误不重试；持续失败仍报告工具错误，不归为资料不足。
+
 超时集中在 `easel/timeouts.py`。断线不取消后台任务，显式停止不交付。
 
 ## 验证与人工验收

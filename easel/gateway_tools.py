@@ -14,6 +14,10 @@ from .timeouts import TIMEOUT_FACT_MODEL, TIMEOUT_RESEARCH_HTTP
 class ToolError(RuntimeError):
     """Safe user-facing error, excluding provider responses and credentials."""
 
+    def __init__(self, message: str, kind: str = "other"):
+        super().__init__(message)
+        self.kind = kind
+
 
 def unpack_result(payload: dict, tool: str) -> dict:
     result = payload.get("result")
@@ -81,9 +85,19 @@ class GatewayTools:
             if not isinstance(payload, dict):
                 raise ValueError()
         except HTTPError as exc:
+            # Classify known llm-task formatting errors without exposing provider bodies.
+            try:
+                detail = exc.read(4096).decode("utf-8", errors="replace")
+            except OSError:
+                detail = ""
+            if tool == "llm-task" and exc.code == 500 and any(marker in detail for marker in (
+                    "LLM returned invalid JSON", "LLM JSON did not match schema")):
+                raise ToolError("模型返回格式不符合输出契约。", kind="model_format") from None
             hint = ("工具未开放，请检查插件启用和权限。" if exc.code in {401, 403, 404}
                     else "工具执行失败，具体原因需查看 Gateway 日志；也可能是模型输出格式校验未通过。")
-            raise ToolError(f"{tool} 调用失败（HTTP {exc.code}），{hint}") from None
+            # This Gateway version masks tool exception details as a generic HTTP 500.
+            kind = "model_execution" if tool == "llm-task" and exc.code == 500 else "other"
+            raise ToolError(f"{tool} 调用失败（HTTP {exc.code}），{hint}", kind=kind) from None
         except (URLError, TimeoutError, OSError, ValueError):
             raise ToolError(f"{tool} 请求失败或超时，未取得可用结果。") from None
         return unpack_result(payload, tool)

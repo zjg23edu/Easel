@@ -264,16 +264,25 @@ class HotTopicFlow:
             contract["properties"]["checks"] = {"type": "object", "additionalProperties": False,
                 "properties": {key: {"$ref": "#/$defs/Check"} for key in keys}, "required": keys}
         prompt += "\n仅返回符合以下JSON Schema的JSON对象，字段名及枚举值须精确一致，不加字段或代码块。\nOUTPUT_JSON_SCHEMA:\n" + json.dumps(contract, ensure_ascii=False)
-        result = await self.invoke("llm-task", {"prompt": prompt, "input": data, "schema": contract,
-                                               "maxTokens": 6500, "timeoutMs": TIMEOUT_FACT_MODEL * 1000})
-        if schema is Review and isinstance(result.get("checks"), dict):
-            result = {**result, "checks": [{**check, "section_id": key} for key, check in result["checks"].items()]}
-        try:
-            return schema.model_validate(result)
-        except ValidationError as exc:
-            self.report["invalid_model_output"] = {"schema": schema.__name__, "output": result,
-                "errors": exc.errors(include_input=False, include_url=False)}
-            raise
+        for attempt in range(2):
+            try:
+                result = await self.invoke("llm-task", {"prompt": prompt, "input": data, "schema": contract,
+                                                       "maxTokens": 6500, "timeoutMs": TIMEOUT_FACT_MODEL * 1000})
+                if schema is Review and isinstance(result.get("checks"), dict):
+                    result = {**result, "checks": [{**check, "section_id": key} for key, check in result["checks"].items()]}
+                try:
+                    return schema.model_validate(result)
+                except ValidationError as exc:
+                    self.report["invalid_model_output"] = {"schema": schema.__name__, "output": result,
+                        "errors": exc.errors(include_input=False, include_url=False)}
+                    raise
+            except (ToolError, ValidationError) as exc:
+                if attempt or (isinstance(exc, ToolError) and exc.kind not in {"model_format", "model_execution"}):
+                    raise
+                self.report.setdefault("model_retries", []).append({"stage": schema.__name__,
+                    "reason": exc.kind if isinstance(exc, ToolError) else "model_format"})
+                self.progress("模型调用未成功，重试当前步骤一次")
+                prompt += "\n请仅返回契约要求的合法JSON，完整保留全部必填字段，不加说明文字。"
 
     async def research(self, topic: HotTopic, request: str, docs: list[dict], followup=False, background_queries=None):
         self.progress("补查文章所需背景" if background_queries else ("补查核心事件来源" if followup else "检索目标事件并读取正文"))
