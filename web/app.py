@@ -2952,7 +2952,14 @@ def _write_ideas(items: list[dict]) -> None:
     tmp.replace(IDEAS_FILE)
 
 
+class IdeaTopicSource(BaseModel):
+    platform: str = ""
+    label: str = ""
+    url: str = ""
+
+
 class IdeaItem(BaseModel):
+    topicSource: IdeaTopicSource | None = None
     title: str
     note: str = ""
     source: str = ""
@@ -2973,6 +2980,7 @@ async def api_ideas_create(req: IdeaItem):
         "title": req.title.strip() or "未命名选题",
         "note": req.note,
         "source": req.source,
+        "topicSource": req.topicSource.model_dump() if req.topicSource else None,
         "status": st,
         "created": int(time.time()),
     }
@@ -2992,6 +3000,9 @@ async def api_ideas_update(iid: str, req: IdeaItem):
                 "source": req.source,
                 "status": req.status if req.status in IDEA_STATUSES else it.get("status", "pending"),
             })
+            # 旧客户端编辑未携带此字段时，保留已存来源；显式 null 可清除。
+            if "topicSource" in req.model_fields_set:
+                it["topicSource"] = req.topicSource.model_dump() if req.topicSource else None
             _write_ideas(items)
             return it
     raise HTTPException(404, "选题不存在")

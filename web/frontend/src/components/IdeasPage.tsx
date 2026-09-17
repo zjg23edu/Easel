@@ -1,10 +1,11 @@
+import type { TopicSource } from '../lib/topicPrompt';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { fetchIdeas, createIdea, updateIdea, deleteIdea, createSchedule } from '../lib/api';
 import type { Idea, IdeaInput } from '../lib/api';
 import { IconIdea, IconEdit, IconTrash, IconChat, IconCalendar, IconChevron } from './icons';
 
 interface IdeasPageProps {
-  onUseTopic: (title: string) => void;
+  onUseTopic: (title: string, source?: TopicSource) => void;
 }
 
 const COLUMNS: { key: string; label: string; color: string }[] = [
@@ -32,7 +33,7 @@ export default function IdeasPage({ onUseTopic }: IdeasPageProps) {
   }, [ideas]);
 
   const openNew = () => { setEditId(null); setForm({ ...EMPTY }); };
-  const openEdit = (it: Idea) => { setEditId(it.id); setForm({ title: it.title, note: it.note, source: it.source, status: it.status }); };
+  const openEdit = (it: Idea) => { setEditId(it.id); setForm({ topicSource: it.topicSource, title: it.title, note: it.note, source: it.source, status: it.status }); };
   const save = async () => {
     if (!form || !form.title.trim()) return;
     if (editId) await updateIdea(editId, form); else await createIdea(form);
@@ -75,7 +76,7 @@ export default function IdeasPage({ onUseTopic }: IdeasPageProps) {
                   {it.source && <span className="badge" style={{ marginTop: 6 }}>{it.source}</span>}
                   {it.note && <div className="idea-note">{it.note}</div>}
                   <div className="idea-foot">
-                    <button className="idea-act" onClick={() => onUseTopic(it.title)}><IconChat size={13} /> 做内容</button>
+                    <button className="idea-act" onClick={() => onUseTopic(it.title, it.topicSource ?? { platform: '', label: '', url: '' })}><IconChat size={13} /> 做内容</button>
                     <button className="idea-act" onClick={() => schedule(it)}><IconCalendar size={13} /> 排期</button>
                     <button className="idea-act next" onClick={() => advance(it)} title="推进状态">
                       {COLUMNS.find((c) => c.key === NEXT[it.status])?.label} <IconChevron size={12} />

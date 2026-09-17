@@ -174,7 +174,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
           </div>
           {pendingIdeas.length === 0 && <div className="dash-empty">还没攒选题，去热点雷达收藏几个吧</div>}
           {pendingIdeas.slice(0, 5).map((it) => (
-            <div key={it.id} className="dash-idea" onClick={() => onUseTopic(it.title)} title="点击做成内容">
+            <div key={it.id} className="dash-idea" onClick={() => onUseTopic(it.title, it.topicSource ?? { platform: '', label: '', url: '' })} title="点击做成内容">
               <span className="dash-idea-title">{it.title}</span>
               {it.source && <span className="badge">{it.source}</span>}
             </div>

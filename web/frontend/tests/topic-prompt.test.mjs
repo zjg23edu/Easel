@@ -24,3 +24,11 @@ test('缺失或非网页链接明确标记未提供', () => {
     assert.ok(message.includes('原始链接：未提供'));
   }
 });
+
+
+test('历史或手动选题可发送，来源缺失显式展示', () => {
+  const message = buildTopicPrompt('手动灵感', { platform: '', label: '', url: '' });
+  assert.ok(message.includes('「手动灵感」'));
+  assert.ok(message.includes('平台：未提供'));
+  assert.ok(message.includes('原始链接：未提供'));
+});

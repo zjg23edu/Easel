@@ -25,10 +25,10 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
   const [updated, setUpdated] = useState(0);
   const [saved, setSaved] = useState<Set<string>>(new Set());
 
-  const save = async (title: string, source: string) => {
+  const save = async (title: string, topicSource: TopicSource) => {
     if (saved.has(title)) return;
     try {
-      await createIdea({ title, source: `${source}热搜`, status: 'pending' });
+      await createIdea({ title, source: `${topicSource.label}热搜`, topicSource, status: 'pending' });
       setSaved((prev) => new Set(prev).add(title));
     } catch { /* ignore */ }
   };
@@ -87,7 +87,7 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
                     {it.hot && <span className="trend-hot">{it.hot}</span>}
                   </div>
                   <button className="trend-save" title={saved.has(it.title) ? '已收藏到选题库' : '收藏到选题库'}
-                    onClick={() => save(it.title, g.label)}>
+                    onClick={() => save(it.title, { platform: g.platform, label: g.label, url: it.url })}>
                     {saved.has(it.title) ? <IconCheck size={14} /> : <IconBookmark size={14} />}
                   </button>
                   <button className="trend-use" title="做成内容"

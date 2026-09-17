@@ -553,3 +553,33 @@ def test_raw_stream_parser_keeps_legacy_events_without_session_id():
         "event": "assistant_text_stream", "evtType": "text_delta", "delta": "兼容旧事件",
     })
     assert web._raw_event_for_session(legacy, "session-a")["delta"] == "兼容旧事件"
+
+
+# ---- 热点收藏：来源贯穿保存、读取、编辑与状态推进 ----
+
+def test_idea_source_survives_storage_and_legacy_edits(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(web, "IDEAS_FILE", tmp_path / "ideas.json")
+    source = {"platform": "zhihu", "label": "知乎", "url": "https://www.zhihu.com/question/123?x=1"}
+    saved = asyncio.run(web.api_ideas_create(web.IdeaItem(
+        title="MiMo 热点", source="知乎热搜", topicSource=source)))
+    assert asyncio.run(web.api_ideas_list())[0]["topicSource"] == source
+    # 旧客户端编辑不带新增字段，不能将已有来源清空。
+    updated = asyncio.run(web.api_ideas_update(saved["id"], web.IdeaItem(
+        title="修改标题", note="新角度", status="doing")))
+    assert updated["topicSource"] == source
+    assert asyncio.run(web.api_ideas_list())[0]["topicSource"] == source
+    # 新客户端带来源的状态推进也不丢字段。
+    advanced = asyncio.run(web.api_ideas_update(saved["id"], web.IdeaItem(
+        title="修改标题", status="done", topicSource=source)))
+    assert advanced["topicSource"] == source
+
+
+def test_legacy_and_manual_ideas_do_not_invent_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(web, "IDEAS_FILE", tmp_path / "ideas.json")
+    web._write_ideas([{"id": "old", "title": "旧热点", "source": "知乎热搜", "status": "pending"}])
+    updated = asyncio.run(web.api_ideas_update("old", web.IdeaItem(title="旧热点", status="doing")))
+    assert "topicSource" not in updated
+    manual = asyncio.run(web.api_ideas_create(web.IdeaItem(title="手动灵感")))
+    assert manual["topicSource"] is None

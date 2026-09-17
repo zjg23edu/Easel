@@ -1,3 +1,4 @@
+import type { TopicSource } from './topicPrompt';
 function getBasePath(): string {
   const path = window.location.pathname;
   const cleaned = path.replace(/\/index\.html$/, '').replace(/\/$/, '');
@@ -215,9 +216,10 @@ export function deleteSchedule(id: string): Promise<{ ok: boolean }> {
 
 // ---- 选题库 ----
 export interface Idea {
+  topicSource?: TopicSource | null;
   id: string; title: string; note: string; source: string; status: string; created: number;
 }
-export type IdeaInput = { title: string; note?: string; source?: string; status?: string };
+export type IdeaInput = { topicSource?: TopicSource | null; title: string; note?: string; source?: string; status?: string };
 export function fetchIdeas(): Promise<Idea[]> { return request('/api/ideas'); }
 export function createIdea(item: IdeaInput): Promise<Idea> {
   return request('/api/ideas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
