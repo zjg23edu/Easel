@@ -15,10 +15,11 @@ EVIDENCE = {
     "core_evidence": [{"statement": "该面板展示MiMo-V2.6-Pro正在训练", "source_id": "S1", "quote": QUOTE}],
     "supported_details": [], "unsupported_claims": [{"statement": "此刻累计成本123万美元", "reason": "未取得此刻的快照"}],
 }
-DRAFT = {"title": "公开训练过程能告诉我们什么", "suitability": "面向关注AI训练的读者", "angles": ["观察训练过程", "过程与结果的区别"],
+DRAFT = {"outline": {"reader": "关注AI的普通读者", "question": "公开过程有什么价值？", "answer": "提供观察依据",
+                     "points": [{"point": "用运行状态说明观察依据", "fact_ids": ["F1"]}]}, "title": "公开训练过程能告诉我们什么", "suitability": "面向关注AI训练的读者", "angles": ["观察训练过程", "过程与结果的区别"],
          "paragraphs": [{"text": "面板显示MiMo-V2.6-Pro正在训练。", "kind": "fact", "fact_ids": ["F1"]},
                         {"text": "我更关注公开过程能否帮助讨论训练方法，而非提前判断最终成绩。", "kind": "analysis", "fact_ids": ["F1"]}]}
-REVIEW = {"core_supported": True, "reason": "有面板正文依据", "checks": [
+REVIEW = {"editorial_ready": True, "core_supported": True, "reason": "有面板正文依据", "checks": [
     {"section_id": key, "status": "supported" if key == "p1" else "opinion", "source_ids": ["S1"] if key == "p1" else [], "reason": "对照正文"}
     for key in ["title", "suitability", "angle1", "angle2", "p1", "p2"]]}
 
@@ -43,7 +44,11 @@ class Tools:
         if tool == "llm-task":
             name = args["schema"]["title"]
             values = {"EventEvidence": self.evidence, "Draft": self.drafts, "Review": self.reviews, "Repair": self.repairs}[name]
-            return values.pop(0) if len(values) > 1 else values[0]
+            value = deepcopy(values.pop(0) if len(values) > 1 else values[0])
+            if name == "Review":
+                value["checks"] = {c["section_id"]: {k: v for k, v in c.items() if k != "section_id"}
+                                   for c in value["checks"]}
+            return value
         raise AssertionError(tool)
 
 
@@ -149,7 +154,7 @@ def test_background_explanation_does_not_need_fake_event_citation():
 @pytest.mark.parametrize("claim", ["正文不存在的句子", "训练"])
 def test_review_issue_must_locate_one_exact_claim(claim):
     sections = {"p1": "训练开始。训练进行中。"}
-    review = Review.model_validate({"core_supported": True, "reason": "已确认", "checks": [{
+    review = Review.model_validate({"editorial_ready": True, "core_supported": True, "reason": "已确认", "checks": [{
         "section_id": "p1", "status": "revise", "source_ids": [], "reason": "待改", "issues": [{
             "text": claim, "reason": "无依据", "instruction": "删除"}]}]})
     with pytest.raises(ValueError):
@@ -199,6 +204,7 @@ def test_contract_is_visible_to_model_at_every_stage():
 @pytest.mark.parametrize("still_needs_polish", [False, True])
 def test_editorial_feedback_triggers_one_revision_without_blocking(still_needs_polish):
     first = deepcopy(REVIEW)
+    first["editorial_ready"] = False
     first["editorial_notes"] = ["p2没有回答标题的问题，请结合已核实事实给出具体解释，合并重复提醒。"]
     final = first if still_needs_polish else REVIEW
     revised = deepcopy(DRAFT)
@@ -238,3 +244,60 @@ def test_quote_normalization_never_erases_meaning(wrong):
     facts, _ = HotTopicFlow.facts(EventEvidence.model_validate(e), [
         {"id": "S1", "text": "**MiMo-V2.6** is not released; cost $10 million"}])
     assert facts == []
+
+
+def test_outline_is_recorded_and_reviewed_but_not_rendered_as_internal_notes():
+    fake = Tools()
+    result, report = run(fake)
+    assert report["outline"] == DRAFT["outline"]
+    reviews = [a for t, a in fake.calls if a.get("schema", {}).get("title") == "Review"]
+    assert reviews[0]["input"]["outline"] == DRAFT["outline"]
+    assert 'fact_ids' not in result["article"]
+    assert DRAFT["outline"]["question"] not in result["article"]
+
+
+def test_critical_background_research_is_bounded_to_one_round():
+    first = deepcopy(REVIEW)
+    first["background_queries"] = ["reinforcement learning introductory definition official"]
+    fake = Tools(reviews=[first, first])
+    result, report = run(fake)
+    queries_used = [a["query"] for t, a in fake.calls if t == "web_search"]
+    assert queries_used.count(first["background_queries"][0]) == 1
+    assert report["research_rounds"][-1]["purpose"] == "background"
+    assert result["article"]
+
+
+def test_person_event_does_not_keep_unsupported_departure_in_same_paragraph():
+    text = "林舟发表了一篇谈创作感受的随笔。他已经决定辞职。"
+    c = Check.model_validate({"section_id": "p1", "status": "revise", "source_ids": ["S1"], "reason": "无辞职依据",
+                              "issues": [{"text": "他已经决定辞职。", "reason": "随笔不能证明去向", "instruction": "删除辞职推断"}]})
+    assert HotTopicFlow.safe_remainder(text, c) == "林舟发表了一篇谈创作感受的随笔。"
+
+
+def test_product_quote_preserves_units_and_time_scope():
+    e = deepcopy(EVIDENCE)
+    e["core_evidence"] = [{"statement": "产品页面列出容量5000mAh", "source_id": "S1", "quote": "Capacity: 5000 mAh; measured under lab conditions", "scope": "snapshot"}]
+    facts, _ = HotTopicFlow.facts(EventEvidence.model_validate(e), [{"id": "S1", "text": "**Capacity:** 5000 mAh; measured under lab conditions"}])
+    assert len(facts) == 1
+    e["core_evidence"][0]["quote"] = "Capacity: 5000 Wh; measured under lab conditions"
+    assert HotTopicFlow.facts(EventEvidence.model_validate(e), [{"id": "S1", "text": "Capacity: 5000 mAh; measured under lab conditions"}])[0] == []
+
+
+def test_review_contract_requires_title_angles_and_every_paragraph():
+    fake = Tools()
+    run(fake)
+    args = next(a for t, a in fake.calls if a.get("schema", {}).get("title") == "Review")
+    checks = args["schema"]["properties"]["checks"]
+    assert checks["type"] == "object"
+    assert set(checks["required"]) == set(HotTopicFlow.sections(Draft.model_validate(DRAFT)))
+    assert checks["additionalProperties"] is False
+    assert {"title", "suitability", "angle1", "angle2", "p1", "p2"} <= set(checks["properties"])
+
+
+def test_resolved_editorial_comments_do_not_trigger_rewrite_or_needs_edit():
+    review = deepcopy(REVIEW)
+    review["editorial_notes"] = ["上一轮问题已修正，继续保留当前解释。"]
+    result, report = run(Tools(reviews=[review]))
+    assert result["status"] == "approved"
+    assert len(report["reviews"]) == 1
+    assert report["editorial_ready"] is True
