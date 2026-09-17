@@ -1260,9 +1260,9 @@ async def _run_hot_topic_turn(req: ChatRequest, topic: HotTopic, turn_id: str, p
                 flow.run(topic, req.message, profile, state.get("previous", "")),
                 timeout=TIMEOUT_HOT_TOPIC,
             )
-            # Audit must persist before an approved article enters the content library.
+            # Persist the audit and honest editorial status before saving a draft.
             _write_hot_topic_json(report_path, flow.report)
-            if result["status"] == "approved":
+            if result["status"] in {"approved", "needs_edit"}:
                 directory = OUTPUTS_DIR / f"热点创作-{_attachment_scope(sk)}"
                 directory.mkdir(parents=True, exist_ok=True)
                 article_path = directory / f"初稿-{report_path.stem}.md"

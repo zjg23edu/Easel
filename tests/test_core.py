@@ -614,12 +614,13 @@ def test_corrupt_hot_topic_context_cannot_fall_back_to_ordinary_agent(hot_web):
         web._resolve_hot_topic(web.ChatRequest(message="继续", sessionId="broken"))
 
 
-@pytest.mark.parametrize("approved", [True, False])
-def test_hot_topic_nonstream_saves_only_approved_articles(hot_web, monkeypatch, approved):
+@pytest.mark.parametrize("status", ["approved", "needs_edit", "blocked"])
+def test_hot_topic_nonstream_saves_drafts_with_honest_status(hot_web, monkeypatch, status):
+    approved = status != "blocked"
     seen = []
     class FakeFlow:
         def __init__(self, invoke, progress):
-            self.report = {"status": "approved" if approved else "blocked"}
+            self.report = {"status": status}
         async def run(self, topic, request, profile, previous):
             seen.append((profile, previous))
             return {"status": self.report["status"], "text": "通过" if approved else "资料不足", "article": "# 核验后的文章" if approved else ""}
@@ -629,7 +630,7 @@ def test_hot_topic_nonstream_saves_only_approved_articles(hot_web, monkeypatch, 
     monkeypatch.setattr(web, "run_agent_sync", no_agent)
     req = web.ChatRequest(message="创作", sessionId="hot-save", hotTopic={"title": "热点"})
     result = asyncio.run(web.api_chat(req))
-    assert result["fact_check"] == ("approved" if approved else "blocked")
+    assert result["fact_check"] == (status)
     articles = list(hot_web.glob("热点创作-*/*.md"))
     assert bool(articles) is approved
     assert seen == [("", "")]

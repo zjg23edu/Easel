@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from easel.hot_topic import HotTopic, HotTopicFlow, EventEvidence, Draft, Review, identity, queries
+from easel.hot_topic import HotTopic, HotTopicFlow, EventEvidence, Draft, Review, Repair, Check, identity, queries
 from easel.gateway_tools import ToolError
 
 QUOTE = "mimo-v2.6-pro in progress step 10 started 2026-09-15 10:32 UTC"
@@ -24,10 +24,11 @@ REVIEW = {"core_supported": True, "reason": "有面板正文依据", "checks": [
 
 
 class Tools:
-    def __init__(self, evidence=None, drafts=None, reviews=None):
+    def __init__(self, evidence=None, drafts=None, reviews=None, repairs=None):
         self.evidence = deepcopy(evidence or [EVIDENCE])
         self.drafts = deepcopy(drafts or [DRAFT])
         self.reviews = deepcopy(reviews or [REVIEW])
+        self.repairs = deepcopy(repairs or [{"patches": [{"section_id": "p3", "text": ""}]}])
         self.calls = []
 
     async def __call__(self, tool, args):
@@ -41,7 +42,7 @@ class Tools:
             return {"text": ""}
         if tool == "llm-task":
             name = args["schema"]["title"]
-            values = {"EventEvidence": self.evidence, "Draft": self.drafts, "Review": self.reviews}[name]
+            values = {"EventEvidence": self.evidence, "Draft": self.drafts, "Review": self.reviews, "Repair": self.repairs}[name]
             return values.pop(0) if len(values) > 1 else values[0]
         raise AssertionError(tool)
 
@@ -102,17 +103,62 @@ def test_only_unconfirmed_core_stops_for_missing_evidence(case):
     assert not any(a.get("schema", {}).get("title") == "Draft" for _,a in fake.calls)
 
 
-def test_unsupported_detail_is_removed_after_revision_not_whole_article():
+def test_local_repair_keeps_supported_sentence_and_is_rechecked():
     draft = deepcopy(DRAFT)
-    draft["paragraphs"].append({"text": "花费123万美元。", "kind": "fact", "fact_ids": ["F1"]})
+    draft["paragraphs"][0]["text"] += "花费123万美元。"
     review = deepcopy(REVIEW)
-    review["checks"].append({"section_id": "p3", "status": "remove", "source_ids": [], "reason": "正文不支持此金额"})
-    fake = Tools(drafts=[draft, draft], reviews=[review, review])
+    review["checks"][4].update(status="revise", issues=[{
+        "text": "花费123万美元。", "reason": "正文不支持此金额", "instruction": "删除金额，保留训练状态"}])
+    fake = Tools(drafts=[draft, draft], reviews=[review, review, REVIEW],
+                 repairs=[{"patches": [{"section_id": "p1", "text": DRAFT["paragraphs"][0]["text"]}]}])
     result, report = run(fake)
     assert result["status"] == "approved"
     assert "123万" not in result["article"] and "正在训练" in result["article"]
-    assert report["removed_sections"] == ["p3"]
-    assert len(report["reviews"]) == 2
+    assert len(report["reviews"]) == 3
+    assert report["reviews"][-1]["draft"]["paragraphs"][0]["text"] == DRAFT["paragraphs"][0]["text"]
+    assert report["remaining_issues"] == []
+
+
+def test_failed_local_repair_preserves_safe_sentences_but_never_claims_approval():
+    draft = deepcopy(DRAFT)
+    draft["paragraphs"][0]["text"] += "花费123万美元。"
+    review = deepcopy(REVIEW)
+    review["checks"][4].update(status="revise", issues=[{
+        "text": "123万美元", "reason": "无依据", "instruction": "删除金额"}])
+    fake = Tools(drafts=[draft], reviews=[review], repairs=[{
+        "patches": [{"section_id": "p1", "text": draft["paragraphs"][0]["text"]}]}])
+    result, report = run(fake)
+    assert result["status"] == "needs_edit"
+    assert "123万" not in result["article"] and "花费" not in result["article"]
+    assert "正在训练" in result["article"]
+    assert "请检查衔接" in result["text"]
+    assert len(report["reviews"]) == 3
+
+
+def test_background_explanation_does_not_need_fake_event_citation():
+    draft = deepcopy(DRAFT)
+    draft["paragraphs"].append({"text": "后训练是在已有模型基础上进一步调整表现。", "kind": "background", "fact_ids": []})
+    review = deepcopy(REVIEW)
+    review["checks"].append({"section_id": "p3", "status": "background", "source_ids": [], "reason": "基础概念准确"})
+    result, report = run(Tools(drafts=[draft], reviews=[review]))
+    assert result["status"] == "approved"
+    assert "进一步调整表现。" in result["article"]
+    assert len(report["reviews"]) == 1
+
+
+@pytest.mark.parametrize("claim", ["正文不存在的句子", "训练"])
+def test_review_issue_must_locate_one_exact_claim(claim):
+    sections = {"p1": "训练开始。训练进行中。"}
+    review = Review.model_validate({"core_supported": True, "reason": "已确认", "checks": [{
+        "section_id": "p1", "status": "revise", "source_ids": [], "reason": "待改", "issues": [{
+            "text": claim, "reason": "无依据", "instruction": "删除"}]}]})
+    with pytest.raises(ValueError):
+        HotTopicFlow.checks(review, sections, [])
+
+
+def test_local_repair_cannot_patch_unknown_sections():
+    with pytest.raises(ValueError):
+        HotTopicFlow.patch(Draft.model_validate(DRAFT), Repair.model_validate({"patches": [{"section_id": "p99", "text": "未知"}]}))
 
 
 def test_missing_review_section_is_processing_error_not_missing_evidence():
@@ -159,12 +205,12 @@ def test_editorial_feedback_triggers_one_revision_without_blocking(still_needs_p
     revised["paragraphs"][1]["text"] = "我认为公开过程的价值在于提供观察依据，不能据此预判最终成绩。"
     fake = Tools(drafts=[DRAFT, revised], reviews=[first, final])
     result, report = run(fake)
-    assert result["status"] == "approved"
+    assert result["status"] == ("needs_edit" if still_needs_polish else "approved")
     assert revised["paragraphs"][1]["text"] in result["article"]
     writes = [args for tool,args in fake.calls if args.get("schema", {}).get("title") == "Draft"]
     assert len(writes) == 2
     assert writes[1]["input"]["feedback"]["editorial_notes"] == first["editorial_notes"]
-    assert writes[1]["input"]["remove_sections"] == []
+    assert "remove_sections" not in writes[1]["input"]
     assert len(report["reviews"]) == 2
 
 
