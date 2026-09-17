@@ -11,3 +11,7 @@
 TIMEOUT_PRODUCE = 7200   # 制作层：生视频 / 多镜合成给足时间
 TIMEOUT_DIRECT = 300     # 轻量直接执行层
 TIMEOUT_CHAT = TIMEOUT_PRODUCE   # chat 可能中途触发制作任务，按制作层预算
+
+TIMEOUT_RESEARCH_HTTP = 60      # 单次搜索 / 正文提取
+TIMEOUT_FACT_MODEL = 180        # 单次事实整理 / 写作 / 独立复核
+TIMEOUT_HOT_TOPIC = 1200        # 总预算（含一次修改复核）
