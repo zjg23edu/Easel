@@ -10,6 +10,7 @@ interface ChatPageProps {
   session: ChatSession;
   stream?: StreamState;          // 进行中的流式态（来自 App，切页也不丢）
   onSend: (displayText: string, attachments?: UploadedFile[]) => void;
+  onDraftChange?: (draft: string) => void;
   onStop: () => void;
   onResend: (
     userIndex: number,
@@ -34,8 +35,8 @@ function greeting(): string {
   return `${g}，想创作点什么？`;
 }
 
-export default function ChatPage({ session, stream, onSend, onStop, onResend, onQuestionAnswered }: ChatPageProps) {
-  const [input, setInput] = useState('');
+export default function ChatPage({ session, stream, onSend, onStop, onResend, onQuestionAnswered, onDraftChange }: ChatPageProps) {
+  const [input, setInput] = useState(() => (session.messages.length === 0 ? session.draft || '' : ''));
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -116,7 +117,10 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
         className="chat-input"
         placeholder={dragOver ? '松手上传素材…' : hero ? '把你的想法告诉我，选题 / 文案 / 卡片 / 视频 / 发布都行…（可拖入图片/文档当素材）' : '发消息…（Enter 发送，Shift+Enter 换行，可拖入/粘贴素材）'}
         value={input}
-        onChange={(e) => setInput(e.target.value)}
+        onChange={(e) => {
+          setInput(e.target.value);
+          if (session.messages.length === 0) onDraftChange?.(e.target.value);
+        }}
         onKeyDown={handleKeyDown}
         onPaste={onPaste}
         rows={1}
@@ -150,11 +154,14 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
           </div>
           <h1 className="chat-hero-title">{greeting()}</h1>
           <p className="chat-hero-sub">从选题到发布，一站式帮你把想法做成能发的内容。</p>
+          <div className="chat-mode-note" role="status">
+            当前是「{session.persona?.trim() || '通用模式'}」。发送前请确认是否使用这个模式；可在左上角切换画像，确认后再发送。
+          </div>
           {inputBox(true)}
           <div className="suggestions">
             {SUGGESTIONS.map((s) => (
               <button key={s.title} className="card card-hover suggestion-card"
-                onClick={() => { if (!isStreaming) onSend(s.prompt); }}>
+                onClick={() => { if (!isStreaming) { onSend(s.prompt); setInput(''); } }}>
                 <span className="suggestion-icon">{s.icon}</span>
                 <span className="suggestion-body">
                   <span className="suggestion-title">{s.title}</span>

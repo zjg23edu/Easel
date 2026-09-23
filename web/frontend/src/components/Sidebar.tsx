@@ -122,8 +122,9 @@ export default function Sidebar({
             if (e.target.value === '__new__') { onNewProfile(); return; }
             onPersonaChange(e.target.value);
           }}
-          disabled={activeSessionHasMessages}
-          title={activeSessionHasMessages ? '当前对话已绑定画像，切换画像将新建对话' : '选择用户画像'}
+          title={activeSessionHasMessages
+            ? '切换后只影响之后发送的消息，已有内容保持原样'
+            : '发送前选择模式：通用模式或某个账号画像'}
         >
           <option value="">通用模式</option>
           {personas.map((p) => (

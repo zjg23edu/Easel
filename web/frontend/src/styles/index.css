@@ -381,6 +381,16 @@ textarea.field { resize: vertical; min-height: 90px; }
   font-size: 34px; font-weight: 400; letter-spacing: -1.2px; text-align: center;
 }
 .chat-hero-sub { color: var(--text-secondary); font-size: 14.5px; text-align: center; margin-top: -6px; }
+.chat-mode-note {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: rgba(51, 66, 148, 0.06);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+}
 
 /* Composer 输入框（空态放大居中，对话态置底） */
 .composer {

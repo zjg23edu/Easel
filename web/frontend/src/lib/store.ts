@@ -16,6 +16,7 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   persona?: string;
+  draft?: string;       // 尚未发送的输入，热点「做内容」预填后由用户自行发送
   created: number;
   sessionKey?: string;  // OpenClaw 的 session key，用于后端删除
   pendingTurnId?: string; // 进行中的可重连 job；浏览器重开后继续按 eventId 续流

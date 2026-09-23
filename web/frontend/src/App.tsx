@@ -466,6 +466,7 @@ export default function App() {
         const base = truncateAt != null ? s.messages.slice(0, truncateAt) : s.messages;
         const updated = {
           ...s,
+          draft: undefined,
           messages: [...base, {
             role: 'user',
             content: visible,
@@ -497,16 +498,16 @@ export default function App() {
     sendUserAndStream(sessionId, displayText, attachments, legacyAgentText, userIndex);
   }, [sendUserAndStream]);
 
-  // 热点「一键做成内容」：新开会话，把选题作为指令发出去，跳到对话页。
+  // 热点「做内容」：新开会话，提示词放进输入框，等用户确认模式后再发送。
   const handleUseTopic = useCallback((title: string, source?: TopicSource) => {
     const prompt = buildTopicPrompt(title, source);
     const ns = createSession(selectedPersona || undefined);
     ns.hotTopic = { title, platform: source?.platform || '', label: source?.label || '', url: source?.url || '' };
+    ns.draft = prompt;
     setSessions((prev) => { const u = [ns, ...prev]; saveSessions(u); return u; });
     setActiveSessionId(ns.id);
     setCurrentPage('chat');
-    sendUserAndStream(ns.id, prompt, [], undefined, undefined, ns.hotTopic);
-  }, [selectedPersona, sendUserAndStream]);
+  }, [selectedPersona]);
 
   const handleStopStream = useCallback((sessionId: string) => {
     streamCtl.current[sessionId]?.abort();
@@ -676,6 +677,15 @@ export default function App() {
             session={activeSession}
             stream={streams[activeSession.id]}
             onSend={(displayText, attachments) => handleSendMessage(activeSession.id, displayText, attachments)}
+            onDraftChange={(draft) => {
+              setSessions((prev) => {
+                const next = prev.map((s) => (
+                  s.id === activeSession.id && s.messages.length === 0 ? { ...s, draft } : s
+                ));
+                saveSessions(next);
+                return next;
+              });
+            }}
             onStop={() => handleStopStream(activeSession.id)}
             onResend={(userIndex, displayText, attachments, legacyAgentText) => handleResend(
               activeSession.id, userIndex, displayText, attachments, legacyAgentText,
