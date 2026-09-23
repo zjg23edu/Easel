@@ -1,0 +1,12 @@
+{
+  "id": "easel-search-query",
+  "name": "Easel search query",
+  "description": "Trim leaked web_search queries and drop site: when a domain filter is already set.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

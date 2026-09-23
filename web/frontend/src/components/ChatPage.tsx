@@ -157,6 +157,11 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
           <div className="chat-mode-note" role="status">
             当前是「{session.persona?.trim() || '通用模式'}」。发送前请确认是否使用这个模式；可在左上角切换画像，确认后再发送。
           </div>
+          {session.hotTopic && (
+            <div className="chat-mode-note" role="status">
+              这句会生成初稿。生成之后，补充和讨论会直接回答；只有写明「改稿」「重写」或「重新生成」才会再写一篇。
+            </div>
+          )}
           {inputBox(true)}
           <div className="suggestions">
             {SUGGESTIONS.map((s) => (
@@ -231,7 +236,14 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
       </div>
 
       <div className="chat-input-area">
-        <div className="chat-input-inner">{inputBox(false)}</div>
+        <div className="chat-input-inner">
+          {session.hotTopic && (
+            <div className="chat-mode-note" role="status">
+              补充和讨论会直接回答。要重新搜索并改稿，请写明「改稿」「重写」或「重新生成」。
+            </div>
+          )}
+          {inputBox(false)}
+        </div>
       </div>
     </div>
   );

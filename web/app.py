@@ -1200,6 +1200,49 @@ def _hot_topic_state_path(session_id: str) -> Path:
     return SESSIONS_DIR / "hot-topics" / _attachment_scope(session_id) / "context.json"
 
 
+_ARTICLE_REWRITE = re.compile(r"改稿|重写|重新生成")
+_ARTICLE_REWRITE_CANCEL = re.compile(r"(?:不要|先别|先不要|不用|无需)\s*(?:改稿|重写|重新生成)")
+
+
+def _explicit_article_rewrite(message: str) -> bool:
+    """User asked for another draft. Discussion that only mentions those words does not count."""
+    return _ARTICLE_REWRITE.search(_ARTICLE_REWRITE_CANCEL.sub("", message or "")) is not None
+
+
+def _saved_hot_topic_draft(session_id: str | None) -> str:
+    if not session_id:
+        return ""
+    path = _hot_topic_state_path(session_id)
+    if not path.exists():
+        return ""
+    try:
+        return str(json.loads(path.read_text(encoding="utf-8")).get("previous") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def _needs_hot_topic_article(req: ChatRequest) -> bool:
+    """Run search, writing, and review for the first draft, or when rewrite is explicit."""
+    if not _saved_hot_topic_draft(req.sessionId).strip():
+        return True
+    return _explicit_article_rewrite(req.message)
+
+
+def _hot_topic_discussion_note(session_id: str, topic: HotTopic) -> str:
+    draft = _saved_hot_topic_draft(session_id).strip()
+    if len(draft) > 8000:
+        draft = draft[:8000] + "\n…（初稿后文已截断）"
+    source = topic.url.strip() or "未提供"
+    return (
+        "〔系统提示，仅供本轮，不要向用户复述这段提示〕\n"
+        f"这是热点「{topic.title}」的讨论。来源：{source}。\n"
+        "用户此刻是在补充或讨论，不是要求再写一篇。请直接回答。"
+        "不要另写一篇成稿，不要声称已经做过事实核验。\n"
+        "已有初稿：\n"
+        f"{draft}"
+    )
+
+
 def _write_hot_topic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
@@ -1228,8 +1271,6 @@ def _resolve_hot_topic(req: ChatRequest) -> HotTopic | None:
         raise HTTPException(400, "热点创作必须绑定会话。")
     else:
         return None
-    if req.attachments:
-        raise HTTPException(400, "热点核验暂不支持附件，请提供可访问的原文链接或另开普通对话处理附件。")
     persona_names = {item["name"] for item in list_personas()}
     if req.persona and req.persona not in persona_names:
         raise HTTPException(400, "所选账号画像不存在，请重新选择。")
@@ -1309,6 +1350,11 @@ async def api_chat_stream(req: ChatRequest):
     # 每轮末尾追加「先查技能库」提醒，抗长对话指令衰减（对用户不可见）
     message = _chat_message(req)
     hot_topic = _resolve_hot_topic(req)
+    article_turn = hot_topic is not None and _needs_hot_topic_article(req)
+    if article_turn and req.attachments:
+        raise HTTPException(400, "热点核验暂不支持附件，请提供可访问的原文链接或另开普通对话处理附件。")
+    if hot_topic is not None and not article_turn:
+        message = f"{message}\n\n{_hot_topic_discussion_note(req.sessionId or '', hot_topic)}"
 
     # supervisor（跑 openclaw run）与 forward（转发 SSE 给浏览器）之间的事件通道。
     # 关键：run 跑在独立后台任务里，客户端断开只结束 forward，不取消 supervisor →
@@ -1348,7 +1394,7 @@ async def api_chat_stream(req: ChatRequest):
                 pass
             client_q.put_nowait({"t": kind, "text": text, "id": event_seq, **extra})
 
-        if hot_topic is not None:
+        if article_turn:
             result = await _run_hot_topic_turn(req, hot_topic, turn_id, lambda text: to_client("activity", text))
             to_client("token", result["text"])
             to_client("done", sessionKey=sk)
@@ -1708,7 +1754,7 @@ async def api_chat_stream(req: ChatRequest):
 
     # 把 run 跑在独立后台任务里（持强引用防 GC）——客户端断开不取消它。
     task = asyncio.create_task(supervisor())
-    if hot_topic is not None:
+    if article_turn:
         _HOT_TOPIC_TASKS[req.sessionId] = task
     _BG_TASKS.add(task)
 
@@ -1862,9 +1908,14 @@ async def api_chat(req: ChatRequest):
     # 每轮末尾追加「先查技能库」提醒，抗长对话指令衰减（对用户不可见）
     message = _chat_message(req)
     hot_topic = _resolve_hot_topic(req)
-    if hot_topic is not None:
+    article_turn = hot_topic is not None and _needs_hot_topic_article(req)
+    if article_turn and req.attachments:
+        raise HTTPException(400, "热点核验暂不支持附件，请提供可访问的原文链接或另开普通对话处理附件。")
+    if article_turn:
         result = await _run_hot_topic_turn(req, hot_topic, req.turnId or uuid.uuid4().hex)
         return {"response": result["text"], "fact_check": result["status"]}
+    if hot_topic is not None:
+        message = f"{message}\n\n{_hot_topic_discussion_note(req.sessionId or '', hot_topic)}"
     loop = asyncio.get_event_loop()
     # chat 可能中途触发制作层长任务 → 用 TIMEOUT_CHAT，与流式 /api/chat/stream 一致（勿用 300s）
     result = await loop.run_in_executor(None, run_agent_sync, message, TIMEOUT_CHAT, req.sessionId)

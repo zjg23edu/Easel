@@ -145,4 +145,12 @@ CTXEOF
 echo "Project context: ✓ CONTEXT.md"
 echo ""
 
+PLUGIN_SRC="$SCRIPT_DIR/plugins/easel-search-query"
+if command -v openclaw >/dev/null 2>&1 && [ -f "$PLUGIN_SRC/openclaw.plugin.json" ]; then
+    echo "Plugin:"
+    openclaw --profile "$PROFILE" plugins install --link "$PLUGIN_SRC"
+    echo "  ✓ easel-search-query（修改查询参数后需重启 Gateway）"
+    echo ""
+fi
+
 echo "[easel] Sync done."

@@ -648,18 +648,34 @@ def test_hot_topic_nonstream_saves_drafts_with_honest_status(hot_web, monkeypatc
             seen.append((profile, previous))
             return {"status": self.report["status"], "text": "通过" if approved else "资料不足", "article": "# 核验后的文章" if approved else ""}
     monkeypatch.setattr(web, "HotTopicFlow", FakeFlow)
-    def no_agent(*args):
-        raise AssertionError("must not run ordinary agent")
-    monkeypatch.setattr(web, "run_agent_sync", no_agent)
+    agent_calls = []
+    def agent(msg, timeout=0, session_id=None):
+        agent_calls.append(msg)
+        return "讨论回复"
+    monkeypatch.setattr(web, "run_agent_sync", agent)
     req = web.ChatRequest(message="创作", sessionId="hot-save", hotTopic={"title": "热点"})
     result = asyncio.run(web.api_chat(req))
     assert result["fact_check"] == (status)
     articles = list(hot_web.glob("热点创作-*/*.md"))
     assert bool(articles) is approved
     assert seen == [("", "")]
-    followup = asyncio.run(web.api_chat(web.ChatRequest(message="修改标题", sessionId=req.sessionId)))
-    assert followup["fact_check"] == result["fact_check"]
-    assert seen[-1][1] == ("# 核验后的文章" if approved else "")
+    assert agent_calls == []
+    followup = asyncio.run(web.api_chat(web.ChatRequest(message="Claude 也发了新模型，对吧？", sessionId=req.sessionId)))
+    if approved:
+        assert followup == {"response": "讨论回复"}
+        assert len(seen) == 1
+        assert "不要另写一篇成稿" in agent_calls[-1]
+        assert "# 核验后的文章" in agent_calls[-1]
+        declined = asyncio.run(web.api_chat(web.ChatRequest(message="先不要重写，我想先讨论价格", sessionId=req.sessionId)))
+        assert declined == {"response": "讨论回复"}
+        assert len(seen) == 1
+        rewrite = asyncio.run(web.api_chat(web.ChatRequest(message="请重写，补上口径", sessionId=req.sessionId)))
+        assert rewrite["fact_check"] == status
+        assert seen[-1][1] == "# 核验后的文章"
+    else:
+        assert followup["fact_check"] == "blocked"
+        assert agent_calls == []
+        assert seen[-1][1] == ""
     assert not web._HOT_TOPIC_TASKS
     saved = asyncio.run(web.api_chat_last(req.sessionId))
     assert saved["fact_check"] == result["fact_check"]
