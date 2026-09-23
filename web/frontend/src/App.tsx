@@ -163,6 +163,9 @@ export default function App() {
   // 当前活跃会话 id 的 ref：供跨标签「谁在用会话 X」查询时即时应答（见挂载 effect）
   const activeIdRef = useRef<string | null>(activeSessionId);
   useEffect(() => { activeIdRef.current = activeSessionId; }, [activeSessionId]);
+  const pageRef = useRef(currentPage);
+  useEffect(() => { pageRef.current = currentPage; }, [currentPage]);
+  const turnStartedRef = useRef<Record<string, number>>({});
 
   // ---- 流式对话：状态与生命周期都放在 App（永不卸载），切页/切 ChatPage 都不中断/丢失 ----
   const [streams, setStreams] = useState<Record<string, StreamState>>({});
@@ -208,10 +211,21 @@ export default function App() {
   };
 
   const appendAssistant = useCallback((sessionId: string, msg: ChatMessage, sessionKey?: string) => {
+    const started = turnStartedRef.current[sessionId];
+    delete turnStartedRef.current[sessionId];
+    const elapsedMs = msg.elapsedMs ?? (started ? Math.max(0, Date.now() - started) : undefined);
+    const watching = pageRef.current === 'chat' && activeIdRef.current === sessionId;
     setSessions((prev) => {
       const next = prev.map((s) =>
         s.id === sessionId
-          ? { ...s, messages: [...s.messages, msg], sessionKey: sessionKey || s.sessionKey, pendingTurnId: undefined }
+          ? {
+              ...s,
+              messages: [...s.messages, { ...msg, ...(elapsedMs != null ? { elapsedMs } : {}) }],
+              sessionKey: sessionKey || s.sessionKey,
+              pendingTurnId: undefined,
+              turnStartedAt: undefined,
+              unreadReply: watching ? false : true,
+            }
           : s);
       saveSessions(next);
       return next;
@@ -239,9 +253,13 @@ export default function App() {
     hotTopic?: HotTopic,
   ) => {
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const startedAt = Date.now();
+    turnStartedRef.current[sessionId] = startedAt;
     try { sessionStorage.setItem(`easel_pending_turn:${sessionId}`, turnId); } catch { /* ignore */ }
     setSessions((prev) => {
-      const next = prev.map((s) => (s.id === sessionId ? { ...s, pendingTurnId: turnId } : s));
+      const next = prev.map((s) => (
+        s.id === sessionId ? { ...s, pendingTurnId: turnId, turnStartedAt: startedAt, unreadReply: false } : s
+      ));
       saveSessions(next); return next;
     });
     streamAcc.current[sessionId] = { content: '', thinking: '', steps: [], questions: [] };
@@ -339,6 +357,15 @@ export default function App() {
     const s = sessionsRef.current.find((x) => x.id === sessionId);
     const last = s?.messages[s.messages.length - 1];
     if (!last || last.role !== 'user') return;   // 没有悬空的用户消息 = 无需恢复
+    const startedAt = s.turnStartedAt || Date.now();
+    turnStartedRef.current[sessionId] = startedAt;
+    if (!s.turnStartedAt) {
+      setSessions((prev) => {
+        const next = prev.map((item) => (item.id === sessionId ? { ...item, turnStartedAt: startedAt } : item));
+        saveSessions(next);
+        return next;
+      });
+    }
     let turnId = s.pendingTurnId;
     try { turnId = sessionStorage.getItem(`easel_pending_turn:${sessionId}`) || turnId; } catch { /* use persisted id */ }
     streamAcc.current[sessionId] = { content: '', thinking: '', steps: [], questions: [] };
@@ -525,8 +552,11 @@ export default function App() {
     }
     clearStream(sessionId);
     // 关键：清掉「本轮进行中」标记，否则下一句被判为「上一条还没跑完」拦下
+    delete turnStartedRef.current[sessionId];
     setSessions((prev) => {
-      const next = prev.map((s) => (s.id === sessionId ? { ...s, pendingTurnId: undefined } : s));
+      const next = prev.map((s) => (
+        s.id === sessionId ? { ...s, pendingTurnId: undefined, turnStartedAt: undefined } : s
+      ));
       saveSessions(next);
       return next;
     });
@@ -580,6 +610,12 @@ export default function App() {
     if (target) {
       setSelectedPersona(target.persona || '');
     }
+    setSessions((prev) => {
+      if (!prev.some((s) => s.id === id && s.unreadReply)) return prev;
+      const next = prev.map((s) => (s.id === id ? { ...s, unreadReply: false } : s));
+      saveSessions(next);
+      return next;
+    });
     setCurrentPage('chat');
   }, [sessions]);
 

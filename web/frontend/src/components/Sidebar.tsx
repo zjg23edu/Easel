@@ -94,6 +94,8 @@ export default function Sidebar({
         onClick={() => onSessionSelect(s.id)}
       >
         <span className="session-item-title">{s.title}</span>
+        {s.pendingTurnId && <span className="session-flag running">进行中</span>}
+        {!s.pendingTurnId && s.unreadReply && <span className="session-flag unread">新回复</span>}
         <div className="session-actions">
           <button className="session-act" title="重命名"
             onClick={(e) => { e.stopPropagation(); startRename(s); }}><IconEdit size={14} /></button>

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChatMessage } from '../lib/store';
 import { renderMarkdown } from '../lib/sanitize';
+import { formatTurnDuration } from '../lib/turnTime';
 import { IconCopy, IconCheck, IconRetry } from './icons';
 
 export interface BubbleActions {
@@ -12,9 +13,22 @@ export interface BubbleActions {
 interface MessageBubbleProps {
   message: ChatMessage;
   isStreaming?: boolean;
+  startedAt?: number;
   thinking?: string;
   activity?: string;
   actions?: BubbleActions;
+}
+
+function TurnTimer({ startedAt, elapsedMs }: { startedAt?: number; elapsedMs?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (elapsedMs != null || !startedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [startedAt, elapsedMs]);
+  const ms = elapsedMs ?? (startedAt ? Math.max(0, now - startedAt) : undefined);
+  if (ms == null) return null;
+  return <div className="turn-timer">用时 {formatTurnDuration(ms)}</div>;
 }
 
 function ActionBar({ actions }: { actions: BubbleActions }) {
@@ -36,7 +50,7 @@ function ActionBar({ actions }: { actions: BubbleActions }) {
   );
 }
 
-export default function MessageBubble({ message, isStreaming, thinking, activity, actions }: MessageBubbleProps) {
+export default function MessageBubble({ message, isStreaming, startedAt, thinking, activity, actions }: MessageBubbleProps) {
   const html = useMemo(() => {
     if (message.role === 'user') return '';
     return renderMarkdown(message.content);
@@ -87,12 +101,15 @@ export default function MessageBubble({ message, isStreaming, thinking, activity
   if (isStreaming && !message.content && !effThinking && !liveActivity) {
     return (
       <div className="message-row assistant">
-        <div className="message-bubble assistant">
-          <div className="typing-indicator">
-            <span className="typing-dot" />
-            <span className="typing-dot" />
-            <span className="typing-dot" />
+        <div className="msg-col assistant">
+          <div className="message-bubble assistant">
+            <div className="typing-indicator">
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+            </div>
           </div>
+          <TurnTimer startedAt={startedAt} />
         </div>
       </div>
     );
@@ -106,6 +123,7 @@ export default function MessageBubble({ message, isStreaming, thinking, activity
           {message.content && <div dangerouslySetInnerHTML={{ __html: html }} />}
           {isStreaming && <span className="streaming-cursor" />}
         </div>
+        <TurnTimer startedAt={isStreaming ? startedAt : undefined} elapsedMs={isStreaming ? undefined : message.elapsedMs} />
         {actions && !isStreaming && <ActionBar actions={actions} />}
       </div>
     </div>

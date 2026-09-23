@@ -8,6 +8,7 @@ export interface ChatMessage {
   attachments?: UploadedFile[]; // 结构化附件引用；仅用于请求/重试，不在消息气泡展示
   thinking?: string;   // 模型思考过程（隐思考），流式结束后持久保留
   activity?: string;   // 工具/执行活动步骤（换行分隔），持久保留
+  elapsedMs?: number;  // 这一轮从发送到回复结束的耗时
 }
 
 export interface ChatSession {
@@ -20,6 +21,8 @@ export interface ChatSession {
   created: number;
   sessionKey?: string;  // OpenClaw 的 session key，用于后端删除
   pendingTurnId?: string; // 进行中的可重连 job；浏览器重开后继续按 eventId 续流
+  turnStartedAt?: number; // 当前这一轮的开始时间，回复结束后清除
+  unreadReply?: boolean;  // 回复到达时用户不在这个对话里
   archived?: boolean;   // 归档：从 History 主列表移到「已归档」区
 }
 

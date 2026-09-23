@@ -222,6 +222,7 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
                 key={`${i}-${msg.role}`}
                 message={msg}
                 isStreaming={live}
+                startedAt={live ? session.turnStartedAt : undefined}
                 thinking={live ? stream!.thinking : ''}
                 activity={live ? stream!.activity : ''}
                 actions={actions}
