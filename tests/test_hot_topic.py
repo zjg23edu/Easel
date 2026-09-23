@@ -4,8 +4,35 @@ from copy import deepcopy
 
 import pytest
 
-from easel.hot_topic import HotTopic, HotTopicFlow, EventEvidence, Draft, Review, Repair, Check, identity, queries
+from easel.hot_topic import (
+    HotTopic, HotTopicFlow, EventEvidence, Draft, Review, Repair, Check, identity, queries,
+    body, repeated_closing,
+)
 from easel.gateway_tools import ToolError
+
+def test_body_drops_navigation_before_truncating():
+    nav = "\n".join(f"[产品{i}](https://example.com/{i})" for i in range(800))
+    article = "Today, we are expanding our GPT-6 series by welcoming GPT-6 Sol and GPT-6 Luna to the generally available lineup."
+    text = nav + "\n" + article
+    assert len(text) > 14000 or nav.count("\n") > 20
+    kept = body(text)
+    assert kept.startswith("Today, we are expanding")
+    assert "[产品0]" not in kept
+
+
+def test_body_keeps_article_that_already_starts_with_prose():
+    text = "面板显示 MiMo-V2.6-Pro 正在训练，训练日志对读者可见。" * 3
+    assert body(text) == text
+
+
+def test_repeated_hedge_endings_are_flagged_and_a_normal_draft_is_not():
+    repeated = [
+        "微软确认两款模型进入 Foundry。但这不能证明已经全面发布。",
+        "第三方写了价格。这些数字不应直接写成已经核实的事实。",
+    ]
+    assert "合并成一句" in repeated_closing(repeated)
+    assert repeated_closing([p["text"] for p in DRAFT["paragraphs"]]) == ""
+
 
 QUOTE = "mimo-v2.6-pro in progress step 10 started 2026-09-15 10:32 UTC"
 BODY = "MiMo-V2.6 training dashboard\n" + QUOTE + "\n" + "Training metrics and trainer logs are visible. " * 5

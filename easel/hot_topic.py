@@ -133,9 +133,47 @@ def public_url(value: str) -> str:
         return ""
 
 
+_BODY_LIMIT = 14000
+_LINK = re.compile(r"!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)")
+_HEDGE_ENDING = re.compile(r"不能|不足以|并不等于|不是同一个|尚未|不宜|不应|无法|没有提供|不能据此|未核实|不能下结论|不能证明")
+
+
+def _plain(line: str) -> str:
+    text = _LINK.sub(" ", line)
+    text = re.sub(r"[#>*|\-\[\]()]+", " ", text)
+    return re.sub(r"\s+", "", text)
+
+
+def _chrome(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    return len(_plain(stripped)) < 24
+
+
 def body(text: str) -> str:
     m = re.search(r"<<<EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>\s*(?:Source:[^\n]*\n)?(?:---\s*)?(.*?)<<<END_EXTERNAL_UNTRUSTED_CONTENT", text, re.S)
-    return (m.group(1) if m else text).strip()[:14000]
+    raw = (m.group(1) if m else text).strip()
+    lines = raw.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() and not _chrome(line)), 0)
+    end = next((i + 1 for i in range(len(lines) - 1, start, -1) if lines[i].strip() and not _chrome(lines[i])), len(lines))
+    trimmed = "\n".join(lines[start:end]).strip()
+    return (trimmed or raw)[:_BODY_LIMIT]
+
+
+def _last_sentence(text: str) -> str:
+    text = re.sub(r"\s*\[[A-Za-z0-9]+\]", "", text).strip()
+    parts = [p.strip() for p in re.findall(r"[^。！？!?]+[。！？!?]?", text) if p.strip()]
+    return parts[-1] if parts else text
+
+
+def repeated_closing(paragraphs: list[str]) -> str:
+    """两段以上用未确定判断收尾时，返回改稿意见。模型复核漏掉这种重复时仍要拦住。"""
+    endings = [_last_sentence(text) for text in paragraphs if text.strip()]
+    hedges = [line for line in endings if _HEDGE_ENDING.search(line)]
+    if len(hedges) >= 2:
+        return "至少两段以同一个未确定判断收尾。把这个限制合并成一句，其余段落改写具体事实，不要再重复该限制。"
+    return ""
 
 
 class _VisibleText(HTMLParser):
@@ -454,6 +492,12 @@ class HotTopicFlow:
                 self.progress("核对具体断言、解释与文章衔接")
                 review = await self.model(AUDIT, {**data, "sections": sections, "outline": draft.outline.model_dump(), "final_pass": attempt > 0,
                                                   "previous_review": previous_review}, Review)
+                repeated = repeated_closing([p.text for p in draft.paragraphs])
+                if repeated:
+                    review = review.model_copy(update={
+                        "editorial_ready": False,
+                        "editorial_notes": [repeated, *review.editorial_notes][:5],
+                    })
                 record = {"draft": draft.model_dump(), "review": review.model_dump()}
                 self.report.setdefault("reviews", []).append(record)
                 checks = self.checks(review, sections, docs)
