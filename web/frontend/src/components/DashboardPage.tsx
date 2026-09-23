@@ -9,7 +9,7 @@ import type {
   AnalyticsPlatform, AccountAnalytics, AccountWhoami,
 } from '../lib/api';
 import type { Page } from './Sidebar';
-import { getWhoamiCache, verifyStale } from '../lib/whoami';
+import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
 import {
   IconFire, IconCalendar, IconOutputs, IconChat, IconSkills, IconAccounts,
   IconIdea, IconPublish,
@@ -67,9 +67,9 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
       const isLog = (p: AnalyticsPlatform) => p.loggedIn || !!cache[p.platform]?.loggedIn;
       const first = ps.find(isLog);
       if (first) setAnaSel((s) => s || first.platform);
-      // 开页后台自愈：对非 API 式的归因平台真校验（whoami），刷新登录态；
-      // B 站走 cookie、公众号走凭证/官方 API 判定，都不起浏览器。
-      const API_BASED = new Set(['bilibili', 'wechat-oa']);
+      // 开页后台自愈：对需要浏览器会话的平台真校验。B 站看 cookie 文件，公众号也要打开后台确认 token。
+      const API_BASED = new Set(['bilibili']);
+      setWhoamiCache('wechat-oa', null);
       verifyStale(ps.filter((p) => !API_BASED.has(p.platform)).map((p) => p.platform), {
         onUpdate: (platform, r) => {
           setWhoamiMap((m) => ({ ...m, [platform]: r }));
@@ -99,7 +99,10 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).slice(0, 5);
   const recent = outputs.slice(0, 5);
   const pendingIdeas = ideas.filter((i) => i.status === 'pending');
-  const loggedIn = accounts.filter((a) => a.loggedIn).length;
+  const loggedIn = accounts.filter((a) => {
+    const checked = whoamiMap[a.platform];
+    return checked ? checked.loggedIn : a.loggedIn;
+  }).length;
 
   const quick: { label: string; page: Page; Icon: typeof IconChat }[] = [
     { label: '开始对话', page: 'chat', Icon: IconChat },
@@ -221,7 +224,10 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
             )}
           </div>
           {(() => {
-            const logged = anaPlats.filter((p) => p.loggedIn || whoamiMap[p.platform]?.loggedIn);
+            const logged = anaPlats.filter((p) => {
+              const checked = whoamiMap[p.platform];
+              return checked ? checked.loggedIn : p.loggedIn;
+            });
             if (anaPlats.length === 0) return <div className="dash-empty">加载中 / 需配置代理</div>;
             if (logged.length === 0) {
               return (

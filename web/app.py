@@ -2004,6 +2004,12 @@ async def api_upload(
     return {"ok": True, "files": saved}
 
 
+def _write_mp_session_marker(state: str, message: str = "") -> None:
+    """回写公众号后台会话标记。账号页读的是 wechat-oa-mp.json，不是 wechat-oa.json。"""
+    import login_state
+    login_state.write_status(str(LOGIN_DIR / "wechat-oa-mp.json"), state, message)
+
+
 def _write_login_marker(platform: str, state: str, message: str = '') -> None:
     """回写登录标记 outputs/_login/<平台>.json（与 login_state.write_status 同格式，原子写）。
     whoami 真校验确认已登录后调用 → _account_logged_in 的快速路径此后自愈并持久。"""
@@ -2319,17 +2325,19 @@ async def api_account_whoami(platform: str):
     backend = cfg['backend']
     if backend == 'unsupported':
         return {'loggedIn': False, 'name': '', 'avatar': ''}
-    if backend == 'wechat-oa':
-        # 不起浏览器：以 mp 后台会话/AppID 配置判断（见 _account_logged_in），名字取配置账号名
-        acc = _wechat_web_account()
-        return {'loggedIn': _account_logged_in(platform, cfg),
-                'name': acc.get('name', '') or '微信公众号', 'avatar': ''}
     # 命中未过期缓存直接返回
     with _WHOAMI_LOCK:
         hit = _WHOAMI_CACHE.get(platform)
     if hit and (time.time() - hit[0]) < WHOAMI_TTL:
         return hit[1]
-    if backend == 'biliup':
+    run_env = _proxy_env()
+    if backend == 'wechat-oa':
+        # 打开 mp 后台确认地址里还有 token。wechat-oa-mp.json 只记录上次扫码成功。
+        cmd = [sys.executable, str(SHARED_SCRIPTS / 'weixin_mp_stats.py'), 'whoami', '--no-proxy']
+        run_env = os.environ.copy()
+        for key in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
+            run_env.pop(key, None)
+    elif backend == 'biliup':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'bili_login.py'), 'whoami',
                '--cookie', str(PROJECT_ROOT / 'cookies.json')]
     elif backend == 'xhs':
@@ -2340,7 +2348,7 @@ async def api_account_whoami(platform: str):
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'web_publisher.py'), 'whoami',
                '--platform', cfg['wp']]
     try:
-        proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=_proxy_env(),
+        proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=run_env,
                                        capture_output=True, text=True, timeout=150)
     except subprocess.TimeoutExpired:
         raise HTTPException(504, '校验超时（浏览器起不来或网络慢）')
@@ -2365,7 +2373,12 @@ async def api_account_whoami(platform: str):
         _WHOAMI_CACHE[platform] = (time.time(), data)
     # 回写标记：确认已登录 → 快速路径（/api/accounts、/api/analytics/platforms）此后也正确；
     # biliup 走 cookies.json 判定，不用标记文件。
-    if backend != 'biliup':
+    if backend == 'wechat-oa':
+        if data['loggedIn']:
+            _write_mp_session_marker('success', data.get('name') or '登录有效')
+        else:
+            _write_mp_session_marker('expired', '后台会话已失效')
+    elif backend != 'biliup':
         if data['loggedIn']:
             _write_login_marker(platform, 'success', data.get('name') or '')
         else:

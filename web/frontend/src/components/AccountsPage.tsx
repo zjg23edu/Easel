@@ -88,6 +88,8 @@ export default function AccountsPage() {
         const targets = list
           .filter((a) => a.supported && a.backend !== 'biliup')
           .map((a) => a.platform);
+        // 旧缓存可能是「只读标记文件」的假已登录，公众号每次打开都重新核对后台会话。
+        setWhoamiCache('wechat-oa', null);
         verifyStale(targets, {
           alive: () => aliveRef.current,
           onUpdate: (platform, r) => setWhoami((w) => ({ ...w, [platform]: r })),
@@ -260,10 +262,8 @@ export default function AccountsPage() {
     }
   }, [load]);
 
-  // 卡片真实登录态：whoami 权威（已返回则以它为准，自愈假阳性），否则用后端 last-known。
-  // 公众号(wechat-oa)例外：后端查 mp 会话即真值(快且权威)，直接用它，避免浏览器里过期的 whoami 缓存把已登录盖成未登录。
+  // 卡片真实登录态：whoami 已返回就以它为准，否则用上次标记。公众号也走这条，避免旧的 success 文件一直显示已登录。
   const effLoggedIn = (a: AccountItem): boolean => {
-    if (a.backend === 'wechat-oa') return a.loggedIn;
     const w = whoami[a.platform];
     if (w && w !== 'loading') return w.loggedIn;
     return a.loggedIn;

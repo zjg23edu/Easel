@@ -596,6 +596,16 @@ def hot_web(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_expired_mp_session_is_not_logged_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "LOGIN_DIR", tmp_path)
+    monkeypatch.setattr(web, "_wechat_has_credentials", lambda: False)
+    cfg = {"backend": "wechat-oa"}
+    web._write_mp_session_marker("success", "登录成功")
+    assert web._account_logged_in("wechat-oa", cfg) is True
+    web._write_mp_session_marker("expired", "后台会话已失效")
+    assert web._account_logged_in("wechat-oa", cfg) is False
+
+
 def test_hot_topic_matches_persona_by_name(hot_web, monkeypatch):
     monkeypatch.setattr(web, "list_personas", lambda: [{"name": "广博云创公司公众号", "description": ""}])
     topic = {"title": "热点", "url": "https://example.org/"}
