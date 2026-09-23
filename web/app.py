@@ -2882,10 +2882,71 @@ TREND_LABELS = {
 _TREND_CACHE: dict[str, tuple[float, list]] = {}
 
 
+ONEAPI_BILI_HOT_URL = "https://api.getoneapi.com/api/bilibili/fetch_hot"
+
+
 def _http_get_json(url: str, timeout: int = 8):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Easel"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _oneapi_api_key() -> str:
+    """OneAPI Key：进程环境优先，否则读项目根 .env。"""
+    key = os.environ.get("ONEAPI_API_KEY", "").strip()
+    if _is_set(key):
+        return key
+    return _read_env().get("ONEAPI_API_KEY", "").strip()
+
+
+def _parse_oneapi_bili_hot(obj: dict) -> list[dict]:
+    """解析 OneAPI「综合热门」：外层 code=200，视频在 data.data.list。"""
+    if not isinstance(obj, dict) or obj.get("code") != 200:
+        return []
+    inner = obj.get("data")
+    if not isinstance(inner, dict):
+        return []
+    payload = inner.get("data") if isinstance(inner.get("data"), dict) else inner
+    items = payload.get("list") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        title = str(it.get("title") or "").strip()
+        if not title:
+            continue
+        stat = it.get("stat") if isinstance(it.get("stat"), dict) else {}
+        hot = stat.get("view")
+        if hot in (None, ""):
+            hot = stat.get("vv") if stat.get("vv") not in (None, "") else ""
+        url = str(it.get("short_link_v2") or "").strip()
+        bvid = str(it.get("bvid") or "").strip()
+        if not url and bvid:
+            url = f"https://www.bilibili.com/video/{bvid}"
+        out.append({"title": title, "hot": str(hot), "url": url})
+    return out
+
+
+def _fetch_bilibili_oneapi() -> list[dict]:
+    key = _oneapi_api_key()
+    if not _is_set(key):
+        return []
+    req = urllib.request.Request(
+        ONEAPI_BILI_HOT_URL,
+        data=b'{"pn":""}',
+        headers={
+            "User-Agent": "Mozilla/5.0 Easel",
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        obj = json.loads(r.read().decode("utf-8", "replace"))
+    return _parse_oneapi_bili_hot(obj if isinstance(obj, dict) else {})
 
 
 def _parse_hot(obj: dict) -> list[dict]:
@@ -2909,6 +2970,13 @@ def _parse_hot(obj: dict) -> list[dict]:
 
 
 def _fetch_platform(pf: str) -> list[dict]:
+    if pf == "bilibili":
+        try:
+            items = _fetch_bilibili_oneapi()
+            if items:
+                return items
+        except Exception:
+            pass
     primary, backup = TREND_SOURCES.get(pf, (None, None))
     for url in (primary, backup):
         if not url:
