@@ -596,6 +596,19 @@ def hot_web(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_hot_topic_matches_persona_by_name(hot_web, monkeypatch):
+    monkeypatch.setattr(web, "list_personas", lambda: [{"name": "广博云创公司公众号", "description": ""}])
+    topic = {"title": "热点", "url": "https://example.org/"}
+    resolved = web._resolve_hot_topic(web.ChatRequest(
+        message="创作", sessionId="persona-ok", persona="广博云创公司公众号", hotTopic=topic))
+    assert resolved.title == "热点"
+    with pytest.raises(web.HTTPException) as exc:
+        web._resolve_hot_topic(web.ChatRequest(
+            message="创作", sessionId="persona-missing", persona="不存在的画像", hotTopic=topic))
+    assert exc.value.status_code == 400
+    assert "画像不存在" in exc.value.detail
+
+
 def test_hot_topic_context_survives_missing_client_metadata(hot_web):
     req = web.ChatRequest(message="创作", sessionId="hot-context", hotTopic={"title": "热点", "url": "https://example.org/"})
     topic = web._resolve_hot_topic(req)

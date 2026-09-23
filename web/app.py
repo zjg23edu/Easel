@@ -1230,7 +1230,8 @@ def _resolve_hot_topic(req: ChatRequest) -> HotTopic | None:
         return None
     if req.attachments:
         raise HTTPException(400, "热点核验暂不支持附件，请提供可访问的原文链接或另开普通对话处理附件。")
-    if req.persona and req.persona not in list_personas():
+    persona_names = {item["name"] for item in list_personas()}
+    if req.persona and req.persona not in persona_names:
         raise HTTPException(400, "所选账号画像不存在，请重新选择。")
     if req.sessionId in _HOT_TOPIC_TASKS:
         raise HTTPException(409, "本会话正在核验，请等待完成或先停止。")
