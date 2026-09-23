@@ -501,8 +501,13 @@ def cmd_whoami(a):
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
                 page.goto(MP_HOME, wait_until="commit", timeout=60000)
-                page.wait_for_timeout(1200)
-                out["loggedIn"] = bool(_extract_token(page.url))
+                # 登录跳转经常超过 1 秒。过早判定会把有效会话写成未登录。
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    if _extract_token(page.url):
+                        out["loggedIn"] = True
+                        break
+                    page.wait_for_timeout(500)
             finally:
                 ctx.close()
     except Exception as e:

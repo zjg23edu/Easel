@@ -9,7 +9,7 @@ import type {
   AnalyticsPlatform, AccountAnalytics, AccountWhoami,
 } from '../lib/api';
 import type { Page } from './Sidebar';
-import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
+import { getWhoamiCache, verifyStale } from '../lib/whoami';
 import {
   IconFire, IconCalendar, IconOutputs, IconChat, IconSkills, IconAccounts,
   IconIdea, IconPublish,
@@ -69,7 +69,6 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
       if (first) setAnaSel((s) => s || first.platform);
       // 开页后台自愈：对需要浏览器会话的平台真校验。B 站看 cookie 文件，公众号也要打开后台确认 token。
       const API_BASED = new Set(['bilibili']);
-      setWhoamiCache('wechat-oa', null);
       verifyStale(ps.filter((p) => !API_BASED.has(p.platform)).map((p) => p.platform), {
         onUpdate: (platform, r) => {
           setWhoamiMap((m) => ({ ...m, [platform]: r }));

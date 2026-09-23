@@ -2377,7 +2377,20 @@ async def api_account_whoami(platform: str):
         if data['loggedIn']:
             _write_mp_session_marker('success', data.get('name') or '登录有效')
         else:
-            _write_mp_session_marker('expired', '后台会话已失效')
+            # 登录流程刚写过 success 时，这次 whoami 可能是抢在浏览器关闭前启动的，不能把成功标记盖掉。
+            marker = LOGIN_DIR / "wechat-oa-mp.json"
+            fresh_success = False
+            try:
+                saved = json.loads(marker.read_text(encoding="utf-8"))
+                fresh_success = saved.get("state") == "success" and int(saved.get("ts") or 0) >= int(time.time()) - 30
+            except (OSError, ValueError, TypeError):
+                fresh_success = False
+            if fresh_success:
+                data = {'loggedIn': True, 'name': data.get('name') or '', 'avatar': ''}
+                with _WHOAMI_LOCK:
+                    _WHOAMI_CACHE[platform] = (time.time(), data)
+            else:
+                _write_mp_session_marker('expired', '后台会话已失效')
     elif backend != 'biliup':
         if data['loggedIn']:
             _write_login_marker(platform, 'success', data.get('name') or '')

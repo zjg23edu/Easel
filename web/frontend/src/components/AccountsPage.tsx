@@ -88,8 +88,6 @@ export default function AccountsPage() {
         const targets = list
           .filter((a) => a.supported && a.backend !== 'biliup')
           .map((a) => a.platform);
-        // 旧缓存可能是「只读标记文件」的假已登录，公众号每次打开都重新核对后台会话。
-        setWhoamiCache('wechat-oa', null);
         verifyStale(targets, {
           alive: () => aliveRef.current,
           onUpdate: (platform, r) => setWhoami((w) => ({ ...w, [platform]: r })),
@@ -227,12 +225,11 @@ export default function AccountsPage() {
           if (['success', 'expired', 'error'].includes(s.state)) {
             stopPoll();
             if (s.state === 'success') {
-              // 像快手一样“内存态立即翻”：wechat-oa 的 effLoggedIn 只看 a.loggedIn，这里直接把它乐观置 true，
-              // 卡片瞬间变「已登录」，不必等 load() 那趟网络往返（后面 load() 再对账兜底）。
+              // 登录流程已经确认 token。不要立刻再开一次浏览器校验，否则会和尚未关闭的登录会话抢 profile，把卡片打回未登录。
+              const confirmed = { loggedIn: true, name: '微信公众号', avatar: '' };
               setAccounts((list) => list.map((x) => x.platform === a.platform ? { ...x, loggedIn: true } : x));
-              setWhoami((w) => { const n = { ...w }; delete n[a.platform]; return n; });
-              setWhoamiCache(a.platform, null);
-              runWhoami(a.platform);
+              setWhoami((w) => ({ ...w, [a.platform]: confirmed }));
+              setWhoamiCache(a.platform, confirmed);
               load();
             }
           }
@@ -243,7 +240,7 @@ export default function AccountsPage() {
     } finally {
       setBusy('');
     }
-  }, [stopPoll, runWhoami, load]);
+  }, [stopPoll, load]);
 
   const handleLogout = useCallback(async (a: AccountItem) => {
     if (!window.confirm(`确定退出「${a.name}」的登录？登录态将被清除，下次发布需重新扫码。`)) return;
