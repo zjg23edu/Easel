@@ -88,6 +88,11 @@ export default function AccountsPage() {
         const targets = list
           .filter((a) => a.supported && a.backend !== 'biliup')
           .map((a) => a.platform);
+        const cached = getWhoamiCache()['wechat-oa'];
+        if (cached && !cached.loggedIn) {
+          setWhoamiCache('wechat-oa', null);
+          setWhoami((w) => { const n = { ...w }; delete n['wechat-oa']; return n; });
+        }
         verifyStale(targets, {
           alive: () => aliveRef.current,
           onUpdate: (platform, r) => setWhoami((w) => ({ ...w, [platform]: r })),
